@@ -16,7 +16,7 @@ from flask import Flask
 from threading import Thread
 import sqlite3
 
-# ===== FIXED DATABASE MODULES =====
+# ===== DATABASE MANAGER =====
 class DatabaseManager:
     """Simple database manager with SQLite"""
     def __init__(self, db_path="serie_ai.db"):
@@ -30,7 +30,7 @@ class DatabaseManager:
         """Connect to SQLite database"""
         try:
             self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
-            self.conn.row_factory = sqlite3.Row  # Return rows as dictionaries
+            self.conn.row_factory = sqlite3.Row
             self.cursor = self.conn.cursor()
             logger.info(f"✅ Connected to database: {self.db_path}")
         except Exception as e:
@@ -69,8 +69,7 @@ class DatabaseManager:
                     confidence REAL,
                     expected_home_goals REAL,
                     expected_away_goals REAL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (telegram_id) REFERENCES users (telegram_id)
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
@@ -89,38 +88,7 @@ class DatabaseManager:
                     confidence REAL,
                     recommended_stake TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    is_active BOOLEAN DEFAULT 1,
-                    FOREIGN KEY (telegram_id) REFERENCES users (telegram_id)
-                )
-            ''')
-            
-            # Bets table (for tracking actual bets)
-            self.cursor.execute('''
-                CREATE TABLE IF NOT EXISTS bets (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    telegram_id BIGINT NOT NULL,
-                    prediction_id INTEGER,
-                    value_bet_id INTEGER,
-                    stake REAL,
-                    odds REAL,
-                    result TEXT,
-                    profit REAL,
-                    placed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    settled_at TIMESTAMP,
-                    FOREIGN KEY (telegram_id) REFERENCES users (telegram_id),
-                    FOREIGN KEY (prediction_id) REFERENCES predictions (id),
-                    FOREIGN KEY (value_bet_id) REFERENCES value_bets (id)
-                )
-            ''')
-            
-            # System logs table
-            self.cursor.execute('''
-                CREATE TABLE IF NOT EXISTS system_logs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    event_type TEXT,
-                    message TEXT,
-                    level TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    is_active BOOLEAN DEFAULT 1
                 )
             ''')
             
@@ -131,40 +99,33 @@ class DatabaseManager:
             logger.error(f"❌ Table creation failed: {e}")
     
     def get_or_create_user(self, telegram_id, username=None, first_name=None, last_name=None):
-        """Get or create user in database - SAFE VERSION"""
+        """Get or create user in database"""
         try:
-            now = datetime.now()
-            now_str = now.strftime('%Y-%m-%d %H:%M:%S')
+            now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             
             # Check if user exists
             self.cursor.execute(
                 "SELECT * FROM users WHERE telegram_id = ?",
                 (telegram_id,)
             )
-            user_row = self.cursor.fetchone()
+            user = self.cursor.fetchone()
             
-            if user_row:
-                # Convert row to dict
-                user_dict = {}
-                for idx, col in enumerate(self.cursor.description):
-                    user_dict[col[0]] = user_row[idx]
-                
+            if user:
                 # Update last seen
                 self.cursor.execute(
                     "UPDATE users SET username = ?, first_name = ?, last_name = ?, last_seen = ? WHERE telegram_id = ?",
-                    (username, first_name, last_name, now_str, telegram_id)
+                    (username, first_name, last_name, now, telegram_id)
                 )
                 self.conn.commit()
                 logger.info(f"✅ User {telegram_id} updated in database")
-                
-                return user_dict
+                return dict(user)
             else:
                 # Create new user
                 self.cursor.execute(
                     '''INSERT INTO users 
                     (telegram_id, username, first_name, last_name, created_at, last_seen) 
                     VALUES (?, ?, ?, ?, ?, ?)''',
-                    (telegram_id, username, first_name, last_name, now_str, now_str)
+                    (telegram_id, username, first_name, last_name, now, now)
                 )
                 self.conn.commit()
                 
@@ -174,12 +135,11 @@ class DatabaseManager:
                     'username': username,
                     'first_name': first_name,
                     'last_name': last_name,
-                    'created_at': now_str
+                    'created_at': now
                 }
                 
         except Exception as e:
             logger.error(f"❌ User creation failed: {e}")
-            # Return minimal user object
             return {
                 'telegram_id': telegram_id,
                 'username': username,
@@ -190,7 +150,7 @@ class DatabaseManager:
     def save_prediction(self, telegram_id, home_team, away_team, league, predicted_result,
                        home_prob, draw_prob, away_prob, confidence,
                        expected_home_goals, expected_away_goals):
-        """Save prediction to database - FIXED VERSION"""
+        """Save prediction to database"""
         try:
             self.cursor.execute(
                 '''INSERT INTO predictions 
@@ -200,7 +160,7 @@ class DatabaseManager:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                 (telegram_id, home_team, away_team, league, predicted_result,
                  home_prob, draw_prob, away_prob, confidence,
-                 expected_home_goals, expected_away_goals, datetime.now())
+                 expected_home_goals, expected_away_goals, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
             )
             self.conn.commit()
             
@@ -211,13 +171,11 @@ class DatabaseManager:
                 'id': prediction_id,
                 'telegram_id': telegram_id,
                 'home_team': home_team,
-                'away_team': away_team,
-                'created_at': datetime.now()
+                'away_team': away_team
             }
             
         except Exception as e:
             logger.error(f"❌ Prediction save failed: {e}")
-            # Return minimal prediction object
             return {
                 'id': 0,
                 'telegram_id': telegram_id,
@@ -235,7 +193,7 @@ class DatabaseManager:
                  probability, edge, confidence, recommended_stake, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                 (telegram_id, match, league, selection, bet_type, odds,
-                 probability, edge, confidence, recommended_stake, datetime.now())
+                 probability, edge, confidence, recommended_stake, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
             )
             self.conn.commit()
             
@@ -300,7 +258,7 @@ class DatabaseManager:
             self.cursor.execute(
                 '''INSERT INTO system_logs (event_type, message, level, created_at)
                 VALUES (?, ?, ?, ?)''',
-                (event_type, message, level, datetime.now())
+                (event_type, message, level, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
             )
             self.conn.commit()
         except Exception as e:
@@ -309,7 +267,7 @@ class DatabaseManager:
     def get_todays_value_bets(self):
         """Get today's value bets"""
         try:
-            today = datetime.now().date()
+            today = datetime.now().strftime('%Y-%m-%d')
             self.cursor.execute(
                 '''SELECT * FROM value_bets 
                 WHERE DATE(created_at) = DATE(?) 
@@ -366,7 +324,6 @@ def home():
 @app.route('/health')
 def health():
     try:
-        # Test database connection
         db_manager.cursor.execute("SELECT 1")
         result = db_manager.cursor.fetchone()
         if result and result[0] == 1:
@@ -374,28 +331,6 @@ def health():
         return "⚠️ Database Error", 500
     except Exception as e:
         return f"❌ System Error: {str(e)}", 500
-
-@app.route('/status')
-def status():
-    try:
-        # Count users
-        db_manager.cursor.execute("SELECT COUNT(*) FROM users")
-        user_count = db_manager.cursor.fetchone()[0]
-        
-        # Count predictions
-        db_manager.cursor.execute("SELECT COUNT(*) FROM predictions")
-        pred_count = db_manager.cursor.fetchone()[0]
-        
-        return {
-            "status": "online",
-            "timestamp": datetime.utcnow().isoformat(),
-            "database": "connected",
-            "users": user_count,
-            "predictions": pred_count,
-            "api_key": "configured" if API_KEY else "simulation_mode"
-        }
-    except Exception as e:
-        return {"status": "error", "error": str(e)}, 500
 
 def run_flask():
     port = int(os.getenv("PORT", "8080"))
@@ -641,7 +576,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command"""
     status = "✅ *Real Data Enabled*" if API_KEY else "⚠️ *Using Simulation*"
     
-    # Sync user to database - FIXED
+    # Sync user to database
     try:
         user_info = None
         if update.message:
@@ -650,7 +585,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_info = update.callback_query.from_user
         
         if user_info:
-            # This will create/update user in database
             db_manager.get_or_create_user(
                 telegram_id=user_info.id,
                 username=user_info.username,
@@ -698,7 +632,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @access_control
 async def quick_predict_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /predict command - FIXED SAVING"""
+    """Handle /predict command"""
     args = context.args
     if len(args) < 2:
         usage_text = "Usage: `/predict [Home Team] [Away Team]`\n"
@@ -717,7 +651,7 @@ async def quick_predict_command(update: Update, context: ContextTypes.DEFAULT_TY
     goals = analysis['goals']
     value = analysis['value_bet']
     
-    # Save to database - FIXED
+    # Save to database
     save_note = ""
     try:
         # Save prediction
@@ -789,156 +723,6 @@ _AI Analysis • {datetime.now().strftime('%Y-%m-%d %H:%M')}_
     
     await update.message.reply_text(response, parse_mode='Markdown')
 
-@access_control
-async def mystats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /mystats command - FIXED VERSION"""
-    message = get_message_object(update)
-    if not message:
-        return
-    
-    # Get user info
-    user_id = update.effective_user.id
-    first_name = update.effective_user.first_name or "User"
-    username = f"@{update.effective_user.username}" if update.effective_user.username else "No username"
-    
-    logger.info(f"📊 Getting stats for user {user_id}")
-    
-    try:
-        # Ensure user exists in DB
-        db_manager.get_or_create_user(
-            telegram_id=user_id,
-            username=update.effective_user.username,
-            first_name=update.effective_user.first_name,
-            last_name=update.effective_user.last_name
-        )
-        
-        # Get predictions from database
-        predictions = db_manager.get_user_predictions(user_id)
-        total_predictions = len(predictions)
-        
-        # Get value bets from database
-        value_bets = db_manager.get_user_value_bets(user_id)
-        total_value_bets = len(value_bets)
-        
-        # Calculate simple statistics
-        if total_predictions > 0:
-            # Assume reasonable accuracy
-            correct_predictions = round(total_predictions * 0.65)  # 65% accuracy
-            accuracy = 65
-            avg_confidence = 72.5
-            
-            # Count predictions by league
-            leagues = {}
-            for p in predictions:
-                league = p.get('league', 'Unknown')
-                leagues[league] = leagues.get(league, 0) + 1
-            
-            if leagues:
-                fav_league = max(leagues.items(), key=lambda x: x[1])[0]
-                fav_league_count = leagues[fav_league]
-            else:
-                fav_league = "None"
-                fav_league_count = 0
-        else:
-            correct_predictions = 0
-            accuracy = 0
-            avg_confidence = 0
-            fav_league = "None"
-            fav_league_count = 0
-        
-        # Calculate value bet stats
-        if total_value_bets > 0:
-            profitable_bets = sum(1 for b in value_bets if b.get('edge', 0) > 0)
-            avg_edge = round(sum(b.get('edge', 0) for b in value_bets) / total_value_bets, 1)
-        else:
-            profitable_bets = 0
-            avg_edge = 0
-        
-        # User level based on activity
-        if total_predictions > 100:
-            user_level = "🟡 Master"
-            level_emoji = "👑"
-        elif total_predictions > 50:
-            user_level = "🟣 Expert"
-            level_emoji = "💎"
-        elif total_predictions > 20:
-            user_level = "🔵 Pro"
-            level_emoji = "⚡"
-        elif total_predictions > 5:
-            user_level = "🟢 Intermediate"
-            level_emoji = "🚀"
-        else:
-            user_level = "⚪ Beginner"
-            level_emoji = "🌱"
-        
-        # Build response - AVOID date parsing issues
-        response = f"""
-{level_emoji} *YOUR STATISTICS*
-
-👤 *Profile:*
-• Name: {first_name}
-• Username: {username}
-• ID: `{user_id}`
-• Level: {user_level}
-
-📊 *Database Records:*
-• Total Predictions: `{total_predictions}`
-• Value Bets Found: `{total_value_bets}`
-• Favorite League: {fav_league} ({fav_league_count} predictions)
-
-📈 *Performance Metrics:*
-• Correct Predictions: `{correct_predictions}/{total_predictions}`
-• Accuracy Rate: `{accuracy}%`
-• Average Confidence: `{avg_confidence}%`
-• Profitable Value Bets: `{profitable_bets}/{total_value_bets}`
-• Average Edge: `{avg_edge}%`
-
-{"🏆 *Recent Predictions:*" if predictions else "🚀 *Get Started:*"}
-"""
-        
-        # Show recent predictions (safe display without date parsing)
-        if predictions:
-            for i, p in enumerate(predictions[:3], 1):
-                home = p.get('home_team', 'Team1')[:15]
-                away = p.get('away_team', 'Team2')[:15]
-                league = p.get('league', '')[:10]
-                league_display = f" ({league})" if league else ""
-                response += f"{i}. {home} vs {away}{league_display}\n"
-        else:
-            response += "• No predictions yet\n• Use `/predict Inter Milan` to start\n"
-        
-        response += f"""
-💡 *Improvement Tips:*
-1. Focus on matches with >65% confidence
-2. Track value bets with edge > 3%
-3. Review your predictions weekly
-
-_Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}_
-"""
-        
-    except Exception as e:
-        logger.error(f"❌ Stats error: {e}", exc_info=True)
-        response = f"""
-📊 *YOUR STATISTICS*
-
-👤 User: {first_name}
-🆔 ID: `{user_id}`
-
-⚠️ *Statistics Overview*
-
-We're having trouble retrieving your detailed statistics.
-
-📝 *Quick Status:*
-• Your predictions are being saved to our database
-• Use `/predict` to analyze more matches
-• Check back later for detailed analytics
-
-_Note: {str(e)[:80]}..._
-"""
-    
-    await message.reply_text(response, parse_mode='Markdown')
-
-# ===== OTHER COMMAND HANDLERS (simplified) =====
 @access_control
 async def todays_matches_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /matches command"""
@@ -1024,381 +808,64 @@ async def value_bets_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text(response, parse_mode='Markdown')
 
 @access_control
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /help command"""
-    help_text = """
-🎯 *SERIE AI BOT - COMPLETE GUIDE*
-
-📋 *AVAILABLE COMMANDS:*
-
-*Main Commands:*
-`/start` - Main menu with all features
-`/predict [Home] [Away]` - Analyze any match
-`/matches` - Today's football matches
-`/standings` - League tables (Serie A, PL, etc.)
-`/value` - Today's best value bets
-`/mystats` - Your personal statistics
-
-*Examples:*
-`/predict Inter Milan`
-`/predict "Real Madrid" "Barcelona" "La Liga"`
-`/predict Bayern Dortmund Bundesliga`
-
-*📊 How Predictions Work:*
-1. AI analyzes team strength, form, and statistics
-2. Calculates win/draw/lose probabilities
-3. Identifies value bets with positive edge
-4. Recommends optimal stake based on confidence
-
-*💎 Value Betting Strategy:*
-• Only bet when edge > 3%
-• Use recommended stake (⭐ = small, ⭐⭐ = medium)
-• Track all bets in your statistics
-• Never bet more than 5% of your bankroll
-
-*🔧 Technical Info:*
-• Database: All predictions saved
-• Updates: Real-time when API available
-• Simulation: Uses advanced algorithms when offline
-
-*❓ Need Help?*
-Contact admin or use feedback feature.
-
-_AI-Powered Football Predictions • v2.0 • Database Edition_
-"""
+async def mystats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /mystats command - FIXED VERSION"""
+    message = get_message_object(update)
+    if not message:
+        return
     
-    keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    user_id = update.effective_user.id
+    first_name = update.effective_user.first_name or "User"
+    username = f"@{update.effective_user.username}" if update.effective_user.username else "No username"
     
-    await update.message.reply_text(help_text, reply_markup=reply_markup, parse_mode='Markdown')
-
-@access_control
-async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle all callback queries"""
-    query = update.callback_query
-    await query.answer()
-    
-    data = query.data
+    logger.info(f"📊 Getting stats for user {user_id}")
     
     try:
-        if data == "show_matches":
-            matches = data_manager.get_todays_matches()
-            
-            if not matches:
-                await query.edit_message_text(
-                    "📅 *TODAY'S MATCHES*\n\nNo matches scheduled for today.",
-                    parse_mode='Markdown'
-                )
-                return
-            
-            # Build response
-            response = "📅 *TODAY'S FOOTBALL MATCHES*\n\n"
-            
-            # Group by league
-            matches_by_league = {}
-            for match in matches:
-                league = match['league']
-                if league not in matches_by_league:
-                    matches_by_league[league] = []
-                matches_by_league[league].append(match)
-            
-            for league_name, league_matches in matches_by_league.items():
-                response += f"*{league_name}*\n"
-                for match in league_matches:
-                    response += f"• ⏰ {match['home']} vs {match['away']} ({match['time']})\n"
-                response += "\n"
-            
-            response += f"_Total: {len(matches)} matches_\n"
-            response += "Tap a match for detailed analysis"
-            
-            # Create keyboard with match options
-            keyboard = []
-            for match in matches[:6]:
-                btn_text = f"📊 {match['home'][:8]} vs {match['away'][:8]}"
-                callback_data = f"analyze_{match['home']}_{match['away']}"
-                keyboard.append([InlineKeyboardButton(btn_text, callback_data=callback_data)])
-            
-            keyboard.append([
-                InlineKeyboardButton("🏆 Standings", callback_data="show_standings_menu"),
-                InlineKeyboardButton("💎 Value Bets", callback_data="show_value_bets")
-            ])
-            keyboard.append([InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")])
-            
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                response,
-                reply_markup=reply_markup,
-                parse_mode='Markdown'
-            )
-        
-        elif data == "show_standings_menu":
-            keyboard = [
-                [InlineKeyboardButton("🇮🇹 Serie A", callback_data="standings_SA")],
-                [InlineKeyboardButton("🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League", callback_data="standings_PL")],
-                [InlineKeyboardButton("🇪🇸 La Liga", callback_data="standings_PD")],
-                [InlineKeyboardButton("🇩🇪 Bundesliga", callback_data="standings_BL1")],
-                [InlineKeyboardButton("🏆 Champions League", callback_data="standings_CL")],
-                [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")]
-            ]
-            
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                "🏆 *Select League Standings:*",
-                reply_markup=reply_markup,
-                parse_mode='Markdown'
-            )
-        
-        elif data.startswith("standings_"):
-            league_code = data.replace("standings_", "")
-            standings_data = data_manager.get_standings(league_code)
-            
-            response = f"🏆 *{standings_data['league_name']} STANDINGS*\n\n"
-            response += "```\n"
-            response += "Pos | Team                | Pld | W  | D  | L  | GF | GA | GD | Pts\n"
-            response += "----|---------------------|-----|----|----|----|----|----|----|-----\n"
-            
-            for team in standings_data['standings'][:10]:
-                pos = str(team['position']).rjust(2)
-                team_name = team['team'][:20].ljust(20)
-                pld = str(team['played']).rjust(3)
-                won = str(team['won']).rjust(2)
-                draw = str(team['draw']).rjust(2)
-                lost = str(team['lost']).rjust(2)
-                gf = str(team['gf']).rjust(2)
-                ga = str(team['ga']).rjust(2)
-                gd = str(team['gd']).rjust(3)
-                pts = str(team['points']).rjust(3)
-                
-                response += f"{pos} | {team_name} | {pld} | {won} | {draw} | {lost} | {gf} | {ga} | {gd} | {pts}\n"
-            
-            response += "```\n\n"
-            response += "_Last updated: " + datetime.now().strftime("%Y-%m-%d %H:%M") + "_"
-            
-            keyboard = [
-                [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")]
-            ]
-            
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                response,
-                reply_markup=reply_markup,
-                parse_mode='Markdown'
-            )
-        
-        elif data == "show_predict_info":
-            response = """
-🎯 *SMART PREDICTION SYSTEM*
-
-⚡ *How it works:*
-1. AI analyzes team statistics, form, and historical data
-2. Calculates win/draw/lose probabilities
-3. Identifies value bets with positive mathematical edge
-4. Provides recommended stake based on confidence
-
-🔍 *To use:*
-Type `/predict [Home Team] [Away Team]`
-Example: `/predict Inter Milan`
-
-📈 *For advanced analysis:*
-`/predict "Inter" "Milan" "Serie A"`
-"""
-            
-            keyboard = [
-                [InlineKeyboardButton("📅 Today's Matches", callback_data="show_matches")],
-                [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                response,
-                reply_markup=reply_markup,
-                parse_mode='Markdown'
-            )
-        
-        elif data == "show_value_bets":
-            bets = data_manager.get_todays_value_bets()
-            
-            if not bets:
-                response = "💎 *NO VALUE BETS TODAY*\n\nNo strong value bets identified for today's matches."
-                keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")]]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                
-                await query.edit_message_text(
-                    response,
-                    reply_markup=reply_markup,
-                    parse_mode='Markdown'
-                )
-                return
-            
-            response = "💎 *TODAY'S TOP VALUE BETS*\n\n"
-            for i, bet in enumerate(bets, 1):
-                response += f"`{i}.` *{bet['match']}*\n"
-                response += f"   • Bet: `{bet['selection']}`\n"
-                response += f"   • Odds: `{bet['odds']}` | Edge: `+{bet['edge']}%`\n"
-                stars = '⭐⭐' if bet['edge'] > 5 else '⭐'
-                response += f"   • Recommended: {stars}\n\n"
-            
-            response += "📈 *Value Betting Strategy:*\n"
-            response += "• Only bet when edge > 3%\n"
-            response += "• Use 1/4 Kelly stake (conservative)\n"
-            response += "• Track all bets in your statistics\n\n"
-            response += "_Generated by Serie AI • Database Edition_"
-            
-            keyboard = [
-                [InlineKeyboardButton("📊 My Stats", callback_data="user_stats")],
-                [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                response,
-                reply_markup=reply_markup,
-                parse_mode='Markdown'
-            )
-        
-        elif data == "user_stats":
-            await mystats_command(update, context)
-        
-        elif data == "show_help":
-            await help_command(update, context)
-        
-        elif data == "back_to_menu":
-            await start_command(update, context)
-        
-        elif data.startswith("analyze_"):
-            parts = data.split("_")
-            if len(parts) >= 3:
-                home = parts[1]
-                away = parts[2]
-                
-                league = "Unknown"
-                for match in data_manager.todays_matches:
-                    if match['home'] == home and match['away'] == away:
-                        league = data_manager.leagues.get(match['league'], 'Unknown')
-                        break
-                
-                analysis = data_manager.analyze_match(home, away, league)
-                probs = analysis['probabilities']
-                goals = analysis['goals']
-                value = analysis['value_bet']
-                
-                prediction_text = {
-                    '1': f'Home Win ({home})',
-                    'X': 'Draw',
-                    '2': f'Away Win ({away})'
-                }
-                
-                response = f"""
-🔍 *MATCH ANALYSIS: {home} vs {away}*
-
-🏆 *Competition:* {league}
-
-📊 *PROBABILITIES:*
-• 🏠 Home Win: `{probs['home']}%`
-• ⚖️ Draw: `{probs['draw']}%`
-• 🚌 Away Win: `{probs['away']}%`
-• 🎯 Predicted: *{prediction_text[analysis['prediction']]}*
-• 🔐 Confidence: `{analysis['confidence']}%`
-
-🥅 *EXPECTED GOALS:*
-• {home}: `{goals['home']}` goals
-• {away}: `{goals['away']}` goals
-• Total: `{goals['total']}` goals
-
-💎 *VALUE BET IDENTIFIED:*
-• Market: `{value['market']}`
-• Selection: `{value['selection']}`
-• Odds: `{value['odds']}` (Fair: {value['fair_odds']})
-• Edge: `+{value['edge']}%`
-• Recommended Stake: {value['stake']}
-
-📈 *RECOMMENDATION:*
-{'✅ **STRONG BET** - High confidence value bet' if value['edge'] > 5 else '🟡 **MODERATE BET** - Positive edge detected' if value['edge'] > 3 else '⏸️ **NO VALUE** - Avoid or small stake'}
-
-_AI Analysis • {datetime.now().strftime('%Y-%m-%d %H:%M')}_
-"""
-                
-                keyboard = [
-                    [InlineKeyboardButton("📅 More Matches", callback_data="show_matches")],
-                    [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")]
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                
-                await query.edit_message_text(
-                    response,
-                    reply_markup=reply_markup,
-                    parse_mode='Markdown'
-                )
-        
-        else:
-            await query.edit_message_text(
-                "❌ Unknown command. Please use /start to return to main menu.",
-                parse_mode='Markdown'
-            )
-    
-    except Exception as e:
-        logger.error(f"❌ Callback handler error: {e}")
-        await query.edit_message_text(
-            "❌ An error occurred. Please try again or use /start",
-            parse_mode='Markdown'
+        # Ensure user exists in DB
+        db_manager.get_or_create_user(
+            telegram_id=user_id,
+            username=update.effective_user.username,
+            first_name=update.effective_user.first_name,
+            last_name=update.effective_user.last_name
         )
-
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle errors in the bot"""
-    logger.error(f"Update {update} caused error: {context.error}")
-    
-    try:
-        if update and update.effective_message:
-            await update.effective_message.reply_text(
-                "❌ An error occurred. Please try again later.",
-                parse_mode='Markdown'
-            )
-    except:
-        pass
-
-def main():
-    """Main function to run the bot"""
-    logger.info("🚀 Starting Serie AI Bot...")
-    
-    # Start Flask web server in separate thread
-    flask_thread = Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    logger.info(f"🌐 Flask server started on port {os.getenv('PORT', '8080')}")
-    
-    # Create Application
-    application = Application.builder().token(BOT_TOKEN).build()
-    
-    # Add command handlers
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("predict", quick_predict_command))
-    application.add_handler(CommandHandler("matches", todays_matches_command))
-    application.add_handler(CommandHandler("standings", standings_command))
-    application.add_handler(CommandHandler("value", value_bets_command))
-    application.add_handler(CommandHandler("mystats", mystats_command))
-    application.add_handler(CommandHandler("help", help_command))
-    
-    # Add callback query handler
-    application.add_handler(CallbackQueryHandler(callback_handler))
-    
-    # Add error handler
-    application.add_error_handler(error_handler)
-    
-    # Start the bot
-    logger.info("🤖 Bot is running. Press Ctrl+C to stop.")
-    logger.info(f"📊 Database: ✅ Connected to SQLite")
-    logger.info(f"🔑 API Key: {'✅ Configured' if API_KEY else '⚠️ Using simulation'}")
-    
-    # Run bot until stopped
-    application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
-
-if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        logger.info("👋 Bot stopped by user")
-    except Exception as e:
-        logger.error(f"💥 Fatal error: {e}")
-        sys.exit(1)
+        
+        # Get predictions from database
+        predictions = db_manager.get_user_predictions(user_id)
+        total_predictions = len(predictions)
+        
+        # Get value bets from database
+        value_bets = db_manager.get_user_value_bets(user_id)
+        total_value_bets = len(value_bets)
+        
+        # Calculate simple statistics
+        if total_predictions > 0:
+            # Assume reasonable accuracy
+            correct_predictions = round(total_predictions * 0.65)  # 65% accuracy
+            accuracy = 65
+            avg_confidence = 72.5
+            
+            # Count predictions by league
+            leagues = {}
+            for p in predictions:
+                league = p.get('league', 'Unknown')
+                leagues[league] = leagues.get(league, 0) + 1
+            
+            if leagues:
+                fav_league = max(leagues.items(), key=lambda x: x[1])[0]
+                fav_league_count = leagues[fav_league]
+            else:
+                fav_league = "None"
+                fav_league_count = 0
+        else:
+            correct_predictions = 0
+            accuracy = 0
+            avg_confidence = 0
+            fav_league = "None"
+            fav_league_count = 0
+        
+        # Calculate value bet stats
+        if total_value_bets > 0:
+            profitable_bets = sum(1 for b in value_bets if b.get('edge', 0) > 0)
+            avg_edge = round(sum(b.get('edge', 0) for b in value_bets) / total_value_bets, 1)
+        else:
+            profitable_bets = 0
