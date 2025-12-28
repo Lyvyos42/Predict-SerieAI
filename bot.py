@@ -563,22 +563,6 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 """Handle /help command"""
 help_text = """
-💎 Value Betting Strategy:
-• Only bet when edge > 3%
-• Use recommended stake (⭐ = small, ⭐⭐ = medium)
-• Track all bets in your statistics
-• Never bet more than 5% of your bankroll
-
-🔧 Technical Info:
-• Database: All predictions saved to SQLite
-• Updates: Real-time analysis
-• Features: Complete Serie AI system
-
-❓ Need Help?
-Use /admin to check your status and contact info.
-
-AI-Powered Football Predictions • Complete Edition
-"""
 
 await update.message.reply_text(help_text, parse_mode='Markdown')
 ===== CALLBACK HANDLER =====
