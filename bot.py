@@ -563,33 +563,6 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 """Handle /help command"""
 help_text = """
-🎯 SERIE AI BOT - COMPLETE GUIDE
-
-📋 AVAILABLE COMMANDS:
-
-Main Commands:
-/start - Main menu with all features
-/predict [Home] [Away] - Analyze any match
-/matches - Today's football matches
-/standings - League tables (Serie A, PL, etc.)
-/value - Today's best value bets
-/mystats - Your personal statistics
-/admin - Check admin status
-
-Examples:
-/predict Inter Milan
-/predict "Real Madrid" "Barcelona" "La Liga"
-/predict Bayern Dortmund Bundesliga
-
-📊 How Predictions Work:
-
-AI analyzes team strength, form, and statistics
-
-Calculates win/draw/lose probabilities
-
-Identifies value bets with positive edge
-
-Recommends optimal stake based on confidence
 
 💎 Value Betting Strategy:
 • Only bet when edge > 3%
@@ -608,7 +581,6 @@ Use /admin to check your status and contact info.
 AI-Powered Football Predictions • Complete Edition
 """
 
-text
 await update.message.reply_text(help_text, parse_mode='Markdown')
 ===== CALLBACK HANDLER =====
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -616,7 +588,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 query = update.callback_query
 await query.answer()
 
-text
 data = query.data
 
 if data == "show_matches":
@@ -660,7 +631,6 @@ def main():
 logger.info("🚀 Starting Serie AI Bot...")
 logger.info(f"📊 Loaded {len(user_manager.allowed_users)} admin users")
 
-text
 # Create application
 application = Application.builder().token(BOT_TOKEN).build()
 
