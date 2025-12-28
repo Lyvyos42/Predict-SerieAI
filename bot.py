@@ -1,155 +1,78 @@
 #!/usr/bin/env python3
 """
-⚽ SERIE AI BOT - WORKING VERSION
+⚽ SERIE AI BOT - SIMPLE WORKING VERSION
 """
 
 import os
 import sys
-import logging
-from datetime import datetime
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler
 
-# ===== CONFIGURATION =====
+# Check token
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
     print("❌ ERROR: BOT_TOKEN not set!")
-    print("💡 Set it with: export BOT_TOKEN='your_token'")
     sys.exit(1)
 
-# Setup logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+# Simple command handlers
+async def start(update, context):
+    await update.message.reply_text("✅ Bot is working! Use /help for commands.")
 
-# ===== SIMPLE COMMAND HANDLERS =====
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start command"""
-    user = update.effective_user
-    text = f"""
-👋 Hello {user.first_name}!
+async def help_cmd(update, context):
+    text = """
+🎯 *SERIE AI BOT*
 
-⚽ *SERIE AI PREDICTION BOT*
-
-📋 *Available Commands:*
-• /start - Show this menu
-• /predict [Home] [Away] - Analyze match
-• /matches - Today's football matches
-• /help - Help guide
-
-📊 *Your Info:*
-• ID: `{user.id}`
-• Username: @{user.username if user.username else 'N/A'}
-
-✅ *Bot is working!*
+📋 *Commands:*
+• /start - Start bot
+• /help - Show help
+• /test - Test command
+• /id - Show your ID
 """
     await update.message.reply_text(text, parse_mode='Markdown')
 
-async def predict_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /predict command"""
-    args = context.args
-    if len(args) < 2:
-        await update.message.reply_text("Usage: /predict [Home] [Away]\nExample: /predict Inter Milan")
-        return
-    
-    home, away = args[0], args[1]
-    
-    import random
-    home_goals = random.randint(0, 3)
-    away_goals = random.randint(0, 2)
-    
-    response = f"""
-⚡ *PREDICTION: {home} vs {away}*
+async def test(update, context):
+    await update.message.reply_text("🧪 Test successful! Bot is responding.")
 
-📊 *Predicted Score:*
-• {home}: {home_goals} goals
-• {away}: {away_goals} goals
-• Total: {home_goals + away_goals} goals
-
-📈 *Confidence:* {random.randint(60, 85)}%
-
-_AI Analysis • {datetime.now().strftime('%H:%M')}_
-"""
-    await update.message.reply_text(response, parse_mode='Markdown')
-
-async def matches_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /matches command"""
-    matches = [
-        "⚽ Inter vs Milan (20:45)",
-        "⚽ Man City vs Liverpool (12:30)",
-        "⚽ Barcelona vs Real Madrid (21:00)"
-    ]
-    
-    response = "📅 *Today's Matches:*\n\n" + "\n".join(matches)
-    await update.message.reply_text(response, parse_mode='Markdown')
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /help command"""
-    help_text = """
-🎯 *SERIE AI BOT - HELP*
-
-📋 *Commands:*
-• /start - Start the bot
-• /predict [home] [away] - Analyze match
-• /matches - Today's matches
-• /help - This help
-
-📊 *Features:*
-• Match predictions
-• Today's fixtures
-• Simple analysis
-
-✅ *Bot Status: Working*
-"""
-    await update.message.reply_text(help_text, parse_mode='Markdown')
-
-async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /admin command"""
+async def id_cmd(update, context):
     user_id = update.effective_user.id
-    response = f"""
+    await update.message.reply_text(f"🆔 Your ID: `{user_id}`", parse_mode='Markdown')
+
+async def admin_cmd(update, context):
+    user_id = update.effective_user.id
+    text = f"""
 🔐 *ADMIN STATUS*
 
 👤 Your ID: `{user_id}`
 👤 Name: {update.effective_user.first_name}
 
-💡 *To make yourself admin:*
-1. Stop the bot
-2. Set environment variable:
-   ```bash
-   export ADMIN_USER_ID="{user_id}"
-Restart the bot
-
-✅ Bot is responding!
+💡 *To add yourself as admin:*
+Set environment variable:
+ADMIN_USER_ID="{user_id}"
 """
-await update.message.reply_text(response, parse_mode='Markdown')
+    await update.message.reply_text(text, parse_mode='Markdown')
 
-===== MAIN FUNCTION =====
+# Main function
 def main():
-"""Main function to run the bot"""
-logger.info("🚀 Starting bot...")
+    print("🚀 Starting bot...")
+    
+    # Create bot
+    app = Application.builder().token(BOT_TOKEN).build()
+    
+    # Add handlers
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("test", test))
+    app.add_handler(CommandHandler("id", id_cmd))
+    app.add_handler(CommandHandler("admin", admin_cmd))
+    
+    # Run
+    print("🤖 Bot running. Ctrl+C to stop.")
+    app.run_polling(drop_pending_updates=True)
 
-text
-# Create application
-application = Application.builder().token(BOT_TOKEN).build()
-
-# Add command handlers
-application.add_handler(CommandHandler("start", start_command))
-application.add_handler(CommandHandler("predict", predict_command))
-application.add_handler(CommandHandler("matches", matches_command))
-application.add_handler(CommandHandler("help", help_command))
-application.add_handler(CommandHandler("admin", admin_command))
-
-# Run bot
-logger.info("🤖 Bot is running. Press Ctrl+C to stop.")
-application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
-===== ENTRY POINT =====
-if name == "main":
-try:
-main()
-except KeyboardInterrupt:
-logger.info("👋 Bot stopped by user")
-except Exception as e:
-logger.error(f"💥 Fatal error: {e}")
-sys.exit(1)
+# Start
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("👋 Bot stopped")
+    except Exception as e:
+        print(f"💥 Error: {e}")
