@@ -1277,6 +1277,42 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
 # ===== MAIN FUNCTION =====
+# ===== SINGLE INSTANCE CHECK =====
+def is_bot_already_running():
+    """Check if another instance is already running"""
+    current_pid = os.getpid()
+    current_script = os.path.abspath(__file__)
+    
+    logger.info(f"🔍 Checking for existing bot instances...")
+    logger.info(f"   Current PID: {current_pid}")
+    logger.info(f"   Current script: {current_script}")
+    
+    for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+        try:
+            # Get process info
+            proc_info = proc.info
+            
+            # Skip current process
+            if proc_info['pid'] == current_pid:
+                continue
+                
+            # Check if it's a Python process
+            if not proc_info['name'] or 'python' not in proc_info['name'].lower():
+                continue
+                
+            # Check command line for bot.py
+            cmdline = proc_info['cmdline'] or []
+            for cmd in cmdline:
+                if 'bot.py' in cmd:
+                    logger.warning(f"⚠️ Found another bot instance: PID {proc_info['pid']}")
+                    logger.warning(f"   Command: {' '.join(cmdline[:3])}...")
+                    return True
+                    
+        except (psutil.NoSuchProcess, psutil.AccessDenied, KeyError):
+            continue
+    
+    logger.info("✅ No other bot instances found")
+    return False
 def main():
     """Main function to run the bot"""
     logger.info("🚀 Starting Serie AI Bot...")
