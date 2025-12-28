@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ⚽ SERIE AI BOT - WITH DATABASE INTEGRATION
-COMPLETE FIXED VERSION
+Complete with auto messages, invite-only, and PostgreSQL
 """
 
 import os
@@ -10,219 +10,35 @@ import logging
 import random
 import asyncio
 from datetime import datetime, timedelta
-from typing import Dict, List, Set, Optional, Tuple
+from typing import Dict, List, Set
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters
 from flask import Flask
 from threading import Thread
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, Text, ForeignKey
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, relationship
-import sqlalchemy as sa
 
+# ========== DATABASE IMPORTS ==========
+from models import init_db, User, Prediction, Bet, ValueBet, SystemLog
+from database import DatabaseManager
+
+# ========== CONFIGURATION ==========
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 API_KEY = os.environ.get("FOOTBALL_DATA_API_KEY")
-ADMIN_USER_ID = os.environ.get("ADMIN_USER_ID", "").split(",")
-INVITE_ONLY = os.environ.get("INVITE_ONLY", "true").lower() == "true"
-DATABASE_URL = os.environ.get("DATABASE_URL")
+ADMIN_USER_ID = os.environ.get("ADMIN_USER_ID", "").split(",")  # Comma-separated admin IDs
+INVITE_ONLY = os.environ.get("INVITE_ONLY", "true").lower() == "true"  # Default: true
+DATABASE_URL = os.environ.get("DATABASE_URL")  # PostgreSQL connection string
 
 if not BOT_TOKEN:
     print("❌ ERROR: BOT_TOKEN not set!")
     sys.exit(1)
 
+# Setup logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# ========== DATABASE MODELS ==========
-Base = declarative_base()
-
-class User(Base):
-    __tablename__ = 'users'
-    
-    id = Column(Integer, primary_key=True)
-    telegram_id = Column(sa.BigInteger, unique=True, nullable=False)
-    username = Column(String(100))
-    first_name = Column(String(100))
-    last_name = Column(String(100))
-    is_active = Column(Boolean, default=True)
-    is_premium = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    predictions = relationship("Prediction", back_populates="user")
-    bets = relationship("Bet", back_populates="user")
-    value_bets = relationship("ValueBet", back_populates="user")
-
-class Prediction(Base):
-    __tablename__ = 'predictions'
-    
-    id = Column(Integer, primary_key=True)
-    telegram_id = Column(sa.BigInteger, nullable=False)
-    home_team = Column(String(100), nullable=False)
-    away_team = Column(String(100), nullable=False)
-    league = Column(String(50))
-    predicted_result = Column(String(5), nullable=False)  # '1', 'X', '2'
-    actual_result = Column(String(5))  # '1', 'X', '2'
-    home_prob = Column(Float)
-    draw_prob = Column(Float)
-    away_prob = Column(Float)
-    confidence = Column(Float)
-    is_correct = Column(Boolean)
-    notes = Column(Text)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    
-    user = relationship("User", back_populates="predictions")
-
-class Bet(Base):
-    __tablename__ = 'bets'
-    
-    id = Column(Integer, primary_key=True)
-    telegram_id = Column(sa.BigInteger, nullable=False)
-    match = Column(String(200), nullable=False)
-    league = Column(String(50))
-    bet_type = Column(String(50))  # 'Match Result', 'Over/Under', 'Both Teams to Score'
-    selection = Column(String(100))
-    odds = Column(Float)
-    stake = Column(Float)
-    result = Column(String(10))  # 'win', 'loss', 'pending'
-    profit = Column(Float)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    
-    user = relationship("User", back_populates="bets")
-
-class ValueBet(Base):
-    __tablename__ = 'value_bets'
-    
-    id = Column(Integer, primary_key=True)
-    telegram_id = Column(sa.BigInteger, nullable=False)
-    match = Column(String(200), nullable=False)
-    league = Column(String(50))
-    bet_type = Column(String(50))
-    selection = Column(String(100))
-    odds = Column(Float)
-    probability = Column(Float)  # Estimated probability in %
-    edge = Column(Float)  # Value edge in %
-    confidence = Column(Float)  # 0-1 confidence score
-    recommended_stake = Column(String(20))  # '⭐', '⭐⭐', '⭐⭐⭐'
-    status = Column(String(20), default='pending')  # 'pending', 'won', 'lost'
-    created_at = Column(DateTime, default=datetime.utcnow)
-    
-    user = relationship("User", back_populates="value_bets")
-
-class SystemLog(Base):
-    __tablename__ = 'system_logs'
-    
-    id = Column(Integer, primary_key=True)
-    level = Column(String(20))  # 'info', 'warning', 'error', 'critical'
-    module = Column(String(100))
-    message = Column(Text)
-    details = Column(Text)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-# ========== DATABASE MANAGER ==========
-class DatabaseManager:
-    def __init__(self, database_url=None):
-        self.database_url = database_url or DATABASE_URL or "sqlite:///bot.db"
-        self.engine = create_engine(self.database_url)
-        self.Session = sessionmaker(bind=self.engine)
-        self.db = self.Session()
-    
-    def close(self):
-        self.db.close()
-    
-    def get_or_create_user(self, telegram_id, username=None, first_name=None, last_name=None):
-        user = self.db.query(User).filter_by(telegram_id=telegram_id).first()
-        if not user:
-            user = User(
-                telegram_id=telegram_id,
-                username=username,
-                first_name=first_name,
-                last_name=last_name
-            )
-            self.db.add(user)
-            self.db.commit()
-        return user
-    
-    def save_prediction(self, telegram_id, home_team, away_team, league, predicted_result, 
-                        home_prob, draw_prob, away_prob, confidence, actual_result=None):
-        prediction = Prediction(
-            telegram_id=telegram_id,
-            home_team=home_team,
-            away_team=away_team,
-            league=league,
-            predicted_result=predicted_result,
-            actual_result=actual_result,
-            home_prob=home_prob,
-            draw_prob=draw_prob,
-            away_prob=away_prob,
-            confidence=confidence,
-            created_at=datetime.utcnow()
-        )
-        self.db.add(prediction)
-        self.db.commit()
-        return prediction
-    
-    def get_user_predictions(self, telegram_id, limit=50):
-        return self.db.query(Prediction).filter_by(
-            telegram_id=telegram_id
-        ).order_by(Prediction.created_at.desc()).limit(limit).all()
-    
-    def get_todays_value_bets(self):
-        today = datetime.utcnow().date()
-        return self.db.query(ValueBet).filter(
-            sa.func.date(ValueBet.created_at) == today
-        ).order_by(ValueBet.edge.desc()).limit(10).all()
-    
-    def get_user_value_bets(self, telegram_id):
-        return self.db.query(ValueBet).filter_by(
-            telegram_id=telegram_id
-        ).order_by(ValueBet.created_at.desc()).limit(20).all()
-    
-    def get_top_users(self, limit=10):
-        users = self.db.query(User).all()
-        user_stats = []
-        for user in users:
-            predictions = self.db.query(Prediction).filter_by(telegram_id=user.telegram_id).all()
-            if predictions:
-                correct = sum(1 for p in predictions if p.is_correct)
-                accuracy = (correct / len(predictions)) * 100
-                user_stats.append({
-                    'user': user,
-                    'accuracy': accuracy,
-                    'total_predictions': len(predictions)
-                })
-        
-        user_stats.sort(key=lambda x: x['accuracy'], reverse=True)
-        return [stat['user'] for stat in user_stats[:limit]]
-    
-    def get_user_rank(self, telegram_id):
-        users = self.get_top_users(limit=1000)
-        for i, user in enumerate(users, 1):
-            if user.telegram_id == telegram_id:
-                return i
-        return None
-    
-    def log_system_event(self, level, module, message, details=None):
-        log = SystemLog(
-            level=level,
-            module=module,
-            message=message,
-            details=details,
-            created_at=datetime.utcnow()
-        )
-        self.db.add(log)
-        self.db.commit()
-
-def init_db():
-    """Initialize database tables"""
-    engine = create_engine(DATABASE_URL or "sqlite:///bot.db")
-    Base.metadata.create_all(engine)
-    logger.info("Database tables created/verified")
-
-# ========== FLASK APP ==========
+# ========== FLASK FOR RAILWAY ==========
 app = Flask(__name__)
 
 @app.route('/')
@@ -231,14 +47,7 @@ def home():
 
 @app.route('/health')
 def health():
-    try:
-        db = DatabaseManager()
-        from sqlalchemy import text
-        result = db.db.execute(text("SELECT 1")).scalar()
-        db.close()
-        return "✅ OK", 200
-    except Exception as e:
-        return f"❌ Database Error: {str(e)}", 500
+    return "✅ OK", 200
 
 def run_flask():
     port = int(os.getenv("PORT", "8080"))
@@ -246,6 +55,8 @@ def run_flask():
 
 # ========== DATA MANAGER ==========
 class DataManager:
+    """Simple and reliable data manager"""
+    
     def __init__(self):
         self.leagues = {
             'SA': '🇮🇹 Serie A',
@@ -263,6 +74,7 @@ class DataManager:
         ]
     
     def get_todays_matches(self):
+        """Get today's matches"""
         matches = []
         for match in self.todays_matches:
             league_name = self.leagues.get(match['league'], 'Unknown')
@@ -275,11 +87,13 @@ class DataManager:
         return matches
     
     def get_standings(self, league_code):
+        """Get standings"""
         if league_code not in self.leagues:
             return {'league_name': 'Unknown', 'standings': []}
         
         league_name = self.leagues[league_code]
         
+        # Teams for each league
         teams_map = {
             'SA': ['Inter', 'Milan', 'Juventus', 'Napoli', 'Roma', 'Lazio', 'Atalanta', 'Fiorentina'],
             'PL': ['Man City', 'Liverpool', 'Arsenal', 'Chelsea', 'Man Utd', 'Tottenham', 'Newcastle', 'Aston Villa'],
@@ -321,6 +135,7 @@ class DataManager:
         }
     
     def analyze_match(self, home, away):
+        """Analyze match"""
         home_score = sum(ord(c) for c in home.lower()) % 100
         away_score = sum(ord(c) for c in away.lower()) % 100
         
@@ -357,25 +172,18 @@ class DataManager:
             }
         }
 
+# ========== GLOBAL INSTANCES ==========
 data_manager = DataManager()
 
-# ========== UTILITY FUNCTIONS ==========
-def check_database_health() -> Tuple[bool, Optional[str]]:
-    try:
-        db = DatabaseManager()
-        from sqlalchemy import text
-        result = db.db.execute(text("SELECT 1")).scalar()
-        db.close()
-        return (True, None) if result == 1 else (False, "Test query failed")
-    except Exception as e:
-        logger.error(f"Database health check failed: {e}")
-        return (False, str(e))
-
+# ========== USER STORAGE (Temporary - will migrate to DB) ==========
 class SimpleUserStorage:
+    """Temporary user storage until full DB migration"""
+    
     def __init__(self):
         self.allowed_users = set()
         self.subscribers = set()
         
+        # Add admin users automatically
         for admin_id in ADMIN_USER_ID:
             if admin_id.strip().isdigit():
                 self.allowed_users.add(int(admin_id.strip()))
@@ -393,18 +201,14 @@ class SimpleUserStorage:
 
 user_storage = SimpleUserStorage()
 
+# ========== ACCESS CONTROL ==========
 def access_control(func):
+    """Decorator to check if user is allowed"""
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
-        if update.message:
-            user_id = update.message.from_user.id
-        elif update.callback_query:
-            user_id = update.callback_query.from_user.id
-        else:
-            if update.message:
-                await update.message.reply_text("❌ Cannot identify user.")
-            return
+        user_id = update.effective_user.id
         
         if not user_storage.is_user_allowed(user_id):
+            # Check for invite code
             if update.message and update.message.text:
                 if update.message.text.startswith('/start'):
                     parts = update.message.text.split()
@@ -417,14 +221,7 @@ def access_control(func):
                         )
                         return
             
-            if update.message:
-                target = update.message
-            elif update.callback_query:
-                target = update.callback_query.message
-            else:
-                return
-            
-            await target.reply_text(
+            await update.message.reply_text(
                 "🔒 *Access Restricted*\n\n"
                 "This bot is invitation-only.\n"
                 "Please contact the administrator for access.\n\n"
@@ -438,41 +235,25 @@ def access_control(func):
     
     return wrapper
 
-def get_message_object(update: Update):
-    if update.message:
-        return update.message
-    elif update.callback_query:
-        return update.callback_query.message
-    return None
-
 # ========== COMMAND HANDLERS ==========
 @access_control
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Main menu"""
     status = "✅ *Real Data Enabled*" if API_KEY else "⚠️ *Using Simulation*"
     
+    # Create or update user in database
     try:
         db = DatabaseManager()
-        if update.message:
-            user_info = update.message.from_user
-        elif update.callback_query:
-            user_info = update.callback_query.from_user
-        else:
-            user_info = None
-            
-        if user_info:
-            user = db.get_or_create_user(
-                telegram_id=user_info.id,
-                username=user_info.username,
-                first_name=user_info.first_name,
-                last_name=user_info.last_name
-            )
+        user = db.get_or_create_user(
+            telegram_id=update.effective_user.id,
+            username=update.effective_user.username,
+            first_name=update.effective_user.first_name,
+            last_name=update.effective_user.last_name
+        )
         db.close()
-        if user_info:
-            logger.info(f"✅ User {user_info.id} synced to database")
+        logger.info(f"✅ User {update.effective_user.id} synced to database")
     except Exception as e:
         logger.error(f"❌ Database sync failed: {e}")
-        if "integer out of range" in str(e):
-            logger.critical(f"🚨 CRITICAL: telegram_id column needs ALTER COLUMN TYPE BIGINT")
     
     text = f"""
 {status}
@@ -501,14 +282,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    message = get_message_object(update)
-    if message:
-        await message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
-    elif update.callback_query:
+    if update.message:
+        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+    else:
         await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
 
 @access_control
 async def quick_predict_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Quick prediction command - WITH DATABASE SAVE"""
     args = context.args
     if len(args) < 2:
         await update.message.reply_text(
@@ -525,6 +306,7 @@ async def quick_predict_command(update: Update, context: ContextTypes.DEFAULT_TY
     goals = analysis['goals']
     value = analysis['value_bet']
     
+    # ========== SAVE TO DATABASE ==========
     try:
         db = DatabaseManager()
         prediction = db.save_prediction(
@@ -544,6 +326,7 @@ async def quick_predict_command(update: Update, context: ContextTypes.DEFAULT_TY
     except Exception as e:
         logger.error(f"❌ Database save failed: {e}")
         save_note = "⚠️ *History not saved*"
+    # ========== END DATABASE SAVE ==========
     
     response = f"""
 ⚡ *QUICK PREDICTION: {home} vs {away}*
@@ -570,6 +353,7 @@ _Enhanced with AI analysis_
 
 @access_control
 async def todays_matches_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Text command: /matches"""
     matches = data_manager.get_todays_matches()
     
     if not matches:
@@ -578,6 +362,7 @@ async def todays_matches_command(update: Update, context: ContextTypes.DEFAULT_T
     
     response = "📅 *TODAY'S FOOTBALL MATCHES*\n\n"
     
+    # Group by league
     matches_by_league = {}
     for match in matches:
         league = match['league']
@@ -593,12 +378,11 @@ async def todays_matches_command(update: Update, context: ContextTypes.DEFAULT_T
     
     response += f"_Total: {len(matches)} matches_"
     
-    message = get_message_object(update)
-    if message:
-        await message.reply_text(response, parse_mode='Markdown')
+    await update.message.reply_text(response, parse_mode='Markdown')
 
 @access_control
 async def standings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Text command: /standings"""
     keyboard = [
         [InlineKeyboardButton("🇮🇹 Serie A", callback_data="standings_SA")],
         [InlineKeyboardButton("🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League", callback_data="standings_PL")],
@@ -609,63 +393,24 @@ async def standings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    message = get_message_object(update)
-    if message:
-        await message.reply_text(
-            "🏆 *Select League Standings:*",
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
+    await update.message.reply_text(
+        "🏆 *Select League Standings:*",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
 
 @access_control
 async def value_bets_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = get_message_object(update)
-    if not message:
-        return
-    
+    """Value bets command - FROM DATABASE"""
+    # ========== GET FROM DATABASE ==========
     try:
         db = DatabaseManager()
-        
-        # Create some sample value bets if none exist
-        if db.db.query(ValueBet).count() == 0:
-            sample_bets = [
-                ValueBet(
-                    telegram_id=1,
-                    match="Inter vs Milan",
-                    league="Serie A",
-                    bet_type="Match Result",
-                    selection="1",
-                    odds=2.10,
-                    probability=55.0,
-                    edge=15.5,
-                    confidence=0.8,
-                    recommended_stake="⭐⭐",
-                    status="pending"
-                ),
-                ValueBet(
-                    telegram_id=1,
-                    match="Man City vs Liverpool",
-                    league="Premier League",
-                    bet_type="Over/Under",
-                    selection="Over 2.5",
-                    odds=1.85,
-                    probability=65.0,
-                    edge=20.3,
-                    confidence=0.7,
-                    recommended_stake="⭐⭐⭐",
-                    status="pending"
-                )
-            ]
-            for bet in sample_bets:
-                db.db.add(bet)
-            db.db.commit()
-        
         bets = db.get_todays_value_bets()
         db.close()
         
         if not bets:
             response = "💎 *NO VALUE BETS TODAY*\n\nNo strong value bets identified for today."
-            await message.reply_text(response, parse_mode='Markdown')
+            await update.message.reply_text(response, parse_mode='Markdown')
             return
         
         response = "💎 *TODAY'S TOP VALUE BETS*\n\n"
@@ -685,175 +430,268 @@ async def value_bets_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except Exception as e:
         logger.error(f"❌ Database value bets failed: {e}")
         response = "❌ Could not load value bets. Please try again later."
+    # ========== END DATABASE CODE ==========
     
-    await message.reply_text(response, parse_mode='Markdown')
+    await update.message.reply_text(response, parse_mode='Markdown')
 
 @access_control
 async def mystats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = get_message_object(update)
-    if not message:
-        return
-    
-    if update.message:
-        user_info = update.message.from_user
-    elif update.callback_query:
-        user_info = update.callback_query.from_user
-    else:
-        await message.reply_text("❌ Cannot identify user.")
-        return
-    
-    user_id = user_info.id
-    first_name = user_info.first_name or "User"
+    """Show user statistics - WITH DATABASE"""
+    user_id = update.effective_user.id
+    first_name = update.effective_user.first_name
     
     logger.info(f"📊 Getting stats for user {user_id}")
     
-    db_healthy, db_error = check_database_health()
-    
-    if not db_healthy:
-        logger.error(f"Database unhealthy for /mystats: {db_error}")
+    try:
+        # Get database connection
+        db = DatabaseManager()
+        
+        # First, ensure user exists in database
+        user = db.get_or_create_user(
+            telegram_id=user_id,
+            username=update.effective_user.username,
+            first_name=first_name,
+            last_name=update.effective_user.last_name
+        )
+        
+        # Get user statistics
+        stats = db.get_user_stats(user_id)
+        db.close()
+        
+        total = stats['total_predictions']
+        correct = stats['correct_predictions']
+        accuracy = stats['accuracy']
+        
+        if total == 0:
+            response = f"""
+📊 *YOUR STATISTICS*
+
+👤 User: {first_name}
+🆔 ID: `{user_id}`
+
+📈 *Performance:*
+• Total Predictions: 0
+• Correct Predictions: 0  
+• Accuracy Rate: 0%
+
+🎯 *Get started with:*
+`/predict Inter Milan`
+
+_Your predictions will be saved automatically_
+"""
+        else:
+            response = f"""
+📊 *YOUR STATISTICS*
+
+👤 User: {first_name}
+🆔 ID: `{user_id}`
+
+📈 *Performance:*
+• Total Predictions: {total}
+• Correct Predictions: {correct}
+• Accuracy Rate: {accuracy}%
+
+🎯 *Recent Predictions:*
+"""
+            # Add recent predictions
+            for i, pred in enumerate(stats['recent_predictions'][:3], 1):
+                if pred.is_correct is None:
+                    result_icon = "⏳"
+                    status = "Pending"
+                elif pred.is_correct:
+                    result_icon = "✅"
+                    status = "Correct"
+                else:
+                    result_icon = "❌"
+                    status = "Wrong"
+                
+                response += f"{i}. {pred.home_team} vs {pred.away_team} ({result_icon} {status})\n"
+            
+            if accuracy > 60:
+                response += "\n🏆 *Excellent accuracy! Keep it up!*"
+            elif accuracy > 50:
+                response += "\n👍 *Good work! Room for improvement.*"
+            else:
+                response += "\n💡 *Study the predictions more carefully.*"
+        
+        logger.info(f"✅ Stats shown for user {user_id}: {total} predictions")
+        
+    except Exception as e:
+        logger.error(f"❌ Database error in mystats: {e}", exc_info=True)
+        
+        # Fallback response
         response = f"""
 📊 *YOUR STATISTICS*
 
 👤 User: {first_name}
 🆔 ID: `{user_id}`
 
-🔧 *Database Connection Issue*
+⚠️ *Database Connection Issue*
 
 The statistics service is temporarily unavailable.
 
-⚠️ *Technical Details:*
-• Connection test failed
-• Error: {db_error[:100] if db_error else "Unknown"}
+🔧 *Try these instead:*
+• `/predict Inter Milan` - Make new predictions
+• `/value` - View today's value bets
+• `/matches` - See today's matches
 
-_This is usually a temporary issue. Try again in a moment._
+_Error details: Database connection failed_
 """
-        await message.reply_text(response, parse_mode='Markdown')
+    
+    await update.message.reply_text(response, parse_mode='Markdown')
+
+@access_control
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Text command: /help"""
+    help_text = """
+🤖 *SERIE AI BOT - COMPLETE HELP GUIDE*
+
+*MAIN COMMANDS:*
+/start - Show main menu with all features
+/predict [team1] [team2] - Quick match prediction (saves to history)
+/matches - Today's football matches
+/standings - League standings
+/value - Today's best value bets (from database)
+/mystats - Your prediction statistics (from database)
+/help - Show this help message
+
+*DATABASE FEATURES:*
+✅ All predictions saved automatically
+✅ Track your accuracy over time
+✅ Value bets stored in PostgreSQL
+✅ User profiles with statistics
+
+*PREDICTION FEATURES:*
+• Match Result (1X2) with probabilities
+• Expected goals analysis
+• Value bet identification
+• Multiple leagues coverage
+• AI-powered predictions
+
+*LEAGUES COVERED:*
+🇮🇹 Serie A, 🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League
+🇪🇸 La Liga, 🇩🇪 Bundesliga
+"""
+    
+    await update.message.reply_text(help_text, parse_mode='Markdown')
+
+# ========== ADMIN COMMANDS ==========
+@access_control
+async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin panel"""
+    user_id = update.effective_user.id
+    
+    if str(user_id) not in ADMIN_USER_ID:
+        await update.message.reply_text("❌ Admin access required.")
         return
     
+    # ========== DATABASE STATS ==========
     try:
         db = DatabaseManager()
-        
-        try:
-            user = db.get_or_create_user(
-                telegram_id=user_id,
-                username=user_info.username,
-                first_name=user_info.first_name,
-                last_name=user_info.last_name
-            )
-            logger.info(f"✅ User {user_id} ensured in database")
-        except Exception as user_error:
-            logger.error(f"❌ User creation failed: {user_error}")
-            if "integer out of range" in str(user_error):
-                logger.critical("🚨 DATABASE SCHEMA ERROR: telegram_id is INTEGER, needs BIGINT")
-                response = f"""
-📊 *YOUR STATISTICS*
-
-👤 User: {first_name}
-🆔 ID: `{user_id}`
-
-🚨 *DATABASE SCHEMA ERROR*
-
-Your user ID ({user_id}) is too large for the current database schema.
-
-🔧 *ADMIN MUST RUN:*
-```sql
-ALTER TABLE users ALTER COLUMN telegram_id TYPE BIGINT;
-ALTER TABLE predictions ALTER COLUMN telegram_id TYPE BIGINT;
-ALTER TABLE bets ALTER COLUMN telegram_id TYPE BIGINT;
-async def database_heartbeat():
-           response += f"\n📈 *Health Status:*\n"
-        
-        healthy, error = check_database_health()
-        if healthy:
-            response += "✅ Database: Connected\n"
-        else:
-            response += f"❌ Database: {error[:50]}\n"
-        
-        response += f"🤖 Bot: Running\n"
-        response += f"🔒 Invite-Only: {'Yes' if INVITE_ONLY else 'No'}\n"
-        response += f"👑 Admins: {len(ADMIN_USER_ID) if ADMIN_USER_ID[0] else 0}\n"
-        
-        response += "\n🛠️ *Admin Commands:*\n"
-        response += "• /dbstats - Detailed database info\n"
-        response += "• Broadcast: Coming soon\n"
-        response += "• User Management: Coming soon\n"
-        
+        total_users = db.db.query(User).count()
+        total_predictions = db.db.query(Prediction).count()
+        total_value_bets = db.db.query(ValueBet).filter(ValueBet.is_active == True).count()
+        db.close()
     except Exception as e:
-        logger.error(f"Admin command error: {e}")
-        response = f"❌ Admin error: {str(e)}"
+        logger.error(f"❌ Database stats failed: {e}")
+        total_users = total_predictions = total_value_bets = "N/A"
+    
+    response = f"""
+🔐 *ADMIN PANEL*
+
+📊 *DATABASE STATISTICS:*
+• Total Users: {total_users}
+• Total Predictions: {total_predictions}
+• Active Value Bets: {total_value_bets}
+• Invite-Only Mode: {'✅ Enabled' if INVITE_ONLY else '❌ Disabled'}
+
+⚙️ *ADMIN COMMANDS:*
+/dbstats - Detailed database statistics
+/adduser [id] - Add user to allowed list
+/listusers - List all allowed users
+/broadcast [msg] - Send message to all users
+
+📈 *USER MANAGEMENT:*
+• Use /adduser to grant access
+• Invite code: `invite123`
+• Database stores all user activity
+
+💾 *DATABASE INFO:*
+• PostgreSQL on Railway
+• Tables: users, predictions, value_bets
+• Auto-saves all predictions
+"""
     
     await update.message.reply_text(response, parse_mode='Markdown')
 
 @access_control
 async def dbstats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Detailed database statistics"""
     user_id = update.effective_user.id
     
-    if str(user_id) not in ADMIN_USER_ID and ADMIN_USER_ID != ['']:
-        await update.message.reply_text("❌ Admin access only.")
+    if str(user_id) not in ADMIN_USER_ID:
+        await update.message.reply_text("❌ Admin access required.")
         return
     
     try:
         db = DatabaseManager()
-        from sqlalchemy import text
         
-        response = "📊 *DATABASE DETAILED STATS*\n\n"
+        # Get detailed stats
+        total_users = db.db.query(User).count()
+        active_users = db.db.query(User).filter(User.is_active == True).count()
+        premium_users = db.db.query(User).filter(User.is_premium == True).count()
         
-        tables = ['users', 'predictions', 'bets', 'value_bets', 'system_logs']
+        total_predictions = db.db.query(Prediction).count()
+        correct_predictions = db.db.query(Prediction).filter(Prediction.is_correct == True).count()
+        pending_predictions = db.db.query(Prediction).filter(Prediction.is_correct == None).count()
         
-        for table in tables:
-            try:
-                result = db.db.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar()
-                response += f"• {table}: {result} records\n"
-            except Exception:
-                response += f"• {table}: Table not found\n"
+        total_value_bets = db.db.query(ValueBet).count()
+        active_value_bets = db.db.query(ValueBet).filter(ValueBet.is_active == True).count()
         
-        response += "\n📈 *Performance Metrics:*\n"
-        
-        # Performance metrics section
-        try:
-            sql_query = "SELECT COUNT(*) as total_users, AVG((SELECT COUNT(*) FROM predictions WHERE users.id = predictions.telegram_id)) as avg_predictions_per_user, MAX((SELECT COUNT(*) FROM predictions WHERE users.id = predictions.telegram_id)) as max_predictions FROM users"
-            result = db.db.execute(text(sql_query)).fetchone()
-            
-            response += f"• Avg predictions/user: {float(result[1] or 0):.1f}\n"
-            response += f"• Max predictions/user: {result[2] or 0}\n"
-        except Exception as e:
-            response += f"• Metrics error: {str(e)[:50]}\n"
-        
-        response += "\n🔍 *Schema Info:*\n"
-        
-        # Schema info section
-        try:
-            sql_query = "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'users' ORDER BY ordinal_position"
-            result = db.db.execute(text(sql_query)).fetchall()
-            
-            response += "• users table columns:\n"
-            for col in result[:5]:
-                response += f"  - {col[0]}: {col[1]}\n"
-        except Exception:
-            response += "• Schema info unavailable\n"
-        
-        response += "\n💾 *Database Info:*\n"
-        
-        # Database info section
-        try:
-            version = db.db.execute(text("SELECT version()")).scalar()
-            response += f"• PostgreSQL: {version.split(',')[0]}\n"
-        except Exception:
-            response += "• Version info unavailable\n"
+        # Recent activity
+        recent_users = db.db.query(User).order_by(User.last_seen.desc()).limit(5).all()
         
         db.close()
         
-        healthy, error = check_database_health()
-        response += f"• Connection: {'✅ Healthy' if healthy else f'❌ {error[:50]}'}\n"
+        # Calculate accuracy
+        accuracy = (correct_predictions / (total_predictions - pending_predictions) * 100) if (total_predictions - pending_predictions) > 0 else 0
+        
+        response = f"""
+📊 *DETAILED DATABASE STATISTICS*
+
+👥 *USERS:*
+• Total Users: {total_users}
+• Active Users: {active_users}
+• Premium Users: {premium_users}
+
+🎯 *PREDICTIONS:*
+• Total Predictions: {total_predictions}
+• Correct Predictions: {correct_predictions}
+• Pending Results: {pending_predictions}
+• System Accuracy: {accuracy:.1f}%
+
+💎 *VALUE BETS:*
+• Total Value Bets: {total_value_bets}
+• Active Value Bets: {active_value_bets}
+
+👤 *RECENTLY ACTIVE USERS:*
+"""
+        for i, user in enumerate(recent_users, 1):
+            last_seen = user.last_seen.strftime("%Y-%m-%d %H:%M") if user.last_seen else "Never"
+            response += f"{i}. {user.first_name} (ID: {user.telegram_id}) - {last_seen}\n"
+        
+        response += f"\n📅 *Last Updated:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         
     except Exception as e:
-        logger.error(f"DB stats error: {e}")
-        response = f"❌ Database stats error: {str(e)}"
+        logger.error(f"❌ Database stats failed: {e}")
+        response = f"❌ Could not load database statistics: {e}"
     
     await update.message.reply_text(response, parse_mode='Markdown')
 
+# ========== BUTTON HANDLERS ==========
 @access_control
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle all button presses"""
     query = update.callback_query
     await query.answer()
     
@@ -888,7 +726,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "back_to_menu":
         await start_command(update, context)
 
+# ========== HELPER FUNCTIONS ==========
 async def show_standings(update: Update, league_code: str):
+    """Show standings for a league"""
     query = update.callback_query
     await query.answer()
     
@@ -922,89 +762,67 @@ async def show_standings(update: Update, league_code: str):
     await query.edit_message_text(response, reply_markup=reply_markup, parse_mode='Markdown')
 
 async def show_predict_info_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Callback: Smart Prediction button"""
     query = update.callback_query
     await query.answer()
     
-    text = ("🎯 *SMART PREDICTION*\n\n"
-            "How it works:\n\n"
-            "AI analyzes team statistics\n\n"
-            "Considers home/away advantage\n\n"
-            "Evaluates recent form\n\n"
-            "Calculates value bets\n\n"
-            "*Quick Prediction:*\n"
-            "/predict [Home Team] [Away Team]\n"
-            "Example: /predict Inter Milan\n\n"
-            "*DATABASE FEATURE:*\n"
-            "✅ All predictions automatically saved\n"
-            "✅ Track your accuracy over time\n"
-            "✅ View history with /mystats\n"
-            "✅ Compete with other users\n\n"
-            "Using advanced AI models + PostgreSQL database")
+    text = """
+🎯 *SMART PREDICTION*
+
+*How it works:*
+1. AI analyzes team statistics
+2. Considers home/away advantage  
+3. Evaluates recent form
+4. Calculates value bets
+
+*Quick Prediction:*
+`/predict [Home Team] [Away Team]`
+Example: `/predict Inter Milan`
+
+*DATABASE FEATURE:*
+✅ All predictions automatically saved
+✅ Track your accuracy over time
+✅ View history with /mystats
+✅ Compete with other users
+
+_Using advanced AI models + PostgreSQL database_
+"""
     
     keyboard = [[InlineKeyboardButton("🏠 Main Menu", callback_data="back_to_menu")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
 
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle errors in the bot."""
-    logger.error(f"Update {update} caused error {context.error}")
-    
-    try:
-        if update and update.effective_message:
-            await update.effective_message.reply_text(
-                "❌ An error occurred. Please try again later."
-            )
-    except Exception:
-        pass
-
-async def database_heartbeat():
-    """Regular database health check."""
-    while True:
-        await asyncio.sleep(300)
-        try:
-            healthy, error = check_database_health()
-            if healthy:
-                logger.debug("✅ Database heartbeat successful")
-            else:
-                logger.warning(f"⚠️ Database heartbeat failed: {error}")
-        except Exception as e:
-            logger.error(f"❌ Heartbeat error: {e}")
-
+# ========== MAIN FUNCTION ==========
 def main():
+    """Initialize and start the bot"""
     print("=" * 60)
-    print("⚽ SERIE AI BOT - WITH DATABASE (FIXED VERSION)")
+    print("⚽ SERIE AI BOT - WITH DATABASE")
     print("=" * 60)
     
+    # Initialize database with debug info
     try:
         print("🔍 Testing database connection...")
         init_db()
         print("✅ Database tables created")
         
+        # Test connection
         from sqlalchemy import text
-        from sqlalchemy import create_engine
-        
-        engine = create_engine(DATABASE_URL or "sqlite:///bot.db")
+        from models import engine
         
         with engine.connect() as conn:
             result = conn.execute(text("SELECT version()"))
             db_version = result.fetchone()[0]
             print(f"✅ PostgreSQL Version: {db_version}")
             
-            result = conn.execute(text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"))
+            # Check tables
+            result = conn.execute(text("""
+                SELECT table_name 
+                FROM information_schema.tables 
+                WHERE table_schema = 'public'
+            """))
             tables = [row[0] for row in result]
             print(f"✅ Tables found: {tables}")
-            
-            try:
-                result = conn.execute(text("SELECT data_type FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'telegram_id'"))
-                col_type = result.fetchone()
-                if col_type:
-                    print(f"📊 users.telegram_id type: {col_type[0]}")
-                    if col_type[0] == 'integer':
-                        print("⚠️  WARNING: telegram_id is INTEGER, should be BIGINT!")
-                        print("💡 Run: ALTER TABLE users ALTER COLUMN telegram_id TYPE BIGINT;")
-            except Exception as e:
-                print(f"⚠️  Could not check column type: {e}")
             
             if 'users' in tables and 'predictions' in tables:
                 print("✅ Required tables exist")
@@ -1012,56 +830,9 @@ def main():
                 print("⚠️  Missing some tables")
         
         # Create sample data
-        try:
-            db = DatabaseManager()
-            
-            # Create sample user if none exists
-            if db.db.query(User).count() == 0:
-                sample_user = User(
-                    telegram_id=123456789,
-                    username="sample_user",
-                    first_name="Sample",
-                    last_name="User"
-                )
-                db.db.add(sample_user)
-                
-                # Create sample prediction
-                sample_prediction = Prediction(
-                    telegram_id=123456789,
-                    home_team="Inter",
-                    away_team="Milan",
-                    league="Serie A",
-                    predicted_result="1",
-                    home_prob=55.5,
-                    draw_prob=25.5,
-                    away_prob=19.0,
-                    confidence=65.5
-                )
-                db.db.add(sample_prediction)
-                
-                # Create sample value bet
-                sample_value_bet = ValueBet(
-                    telegram_id=123456789,
-                    match="Inter vs Milan",
-                    league="Serie A",
-                    bet_type="Match Result",
-                    selection="1",
-                    odds=2.10,
-                    probability=55.0,
-                    edge=15.5,
-                    confidence=0.8,
-                    recommended_stake="⭐⭐"
-                )
-                db.db.add(sample_value_bet)
-                
-                db.db.commit()
-                print("✅ Sample data created")
-            else:
-                print("✅ Data already exists")
-            
-            db.close()
-        except Exception as e:
-            print(f"⚠️  Could not create sample data: {e}")
+        from init_database import create_sample_data
+        create_sample_data()
+        print("✅ Sample data created")
         
     except Exception as e:
         print(f"❌ Database initialization failed: {e}")
@@ -1076,25 +847,28 @@ def main():
     if ADMIN_USER_ID and ADMIN_USER_ID[0]:
         print(f"👑 Admin Users: {len(ADMIN_USER_ID)} configured")
     
+    # Start Flask for Railway
     flask_thread = Thread(target=run_flask, daemon=True)
     flask_thread.start()
     
+    # Build bot application
     application = Application.builder().token(BOT_TOKEN).build()
     
+    # Register command handlers
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("predict", quick_predict_command))
     application.add_handler(CommandHandler("matches", todays_matches_command))
     application.add_handler(CommandHandler("standings", standings_command))
     application.add_handler(CommandHandler("value", value_bets_command))
-    application.add_handler(CommandHandler("mystats", mystats_command))
+    application.add_handler(CommandHandler("mystats", mystats_command))  # ADDED THIS LINE
     application.add_handler(CommandHandler("help", help_command))
     
+    # Admin commands
     application.add_handler(CommandHandler("admin", admin_command))
     application.add_handler(CommandHandler("dbstats", dbstats_command))
     
+    # Register button handler
     application.add_handler(CallbackQueryHandler(button_handler))
-    
-    application.add_error_handler(error_handler)
     
     print("✅ Bot initialized with database features")
     print("   Commands available:")
@@ -1103,26 +877,16 @@ def main():
     print("   • /matches - Today's matches")
     print("   • /standings - League standings")
     print("   • /value - Value bets from DB")
-    print("   • /mystats - Your statistics from DB (FIXED)")
-    print("   • /help - Help and guide")
+    print("   • /mystats - Your statistics from DB")  # ADDED THIS LINE
     print("   • /admin - Admin panel (DB stats)")
-    print("   • /dbstats - Detailed DB info (Admin)")
     print("=" * 60)
     print("📱 Test on Telegram with /start")
     
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.create_task(database_heartbeat())
-    
-    try:
-        application.run_polling(
-            drop_pending_updates=True,
-            allowed_updates=Update.ALL_TYPES
-        )
-    except KeyboardInterrupt:
-        print("\n👋 Bot stopped by user")
-    except Exception as e:
-        print(f"❌ Bot crashed: {e}")
+    # Start bot
+    application.run_polling(
+        drop_pending_updates=True,
+        allowed_updates=Update.ALL_TYPES
+    )
 
 if __name__ == "__main__":
     main()
