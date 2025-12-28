@@ -804,20 +804,14 @@ async def dbstats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 result = db.db.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar()
                 response += f"• {table}: {result} records\n"
-            except:
+            except Exception:
                 response += f"• {table}: Table not found\n"
         
         response += "\n📈 *Performance Metrics:*\n"
         
+        # Performance metrics section
         try:
-            # FIXED: Properly indented SQL query
-            sql_query = """
-SELECT 
-    COUNT(*) as total_users,
-    AVG((SELECT COUNT(*) FROM predictions WHERE users.id = predictions.telegram_id)) as avg_predictions_per_user,
-    MAX((SELECT COUNT(*) FROM predictions WHERE users.id = predictions.telegram_id)) as max_predictions
-FROM users
-"""
+            sql_query = "SELECT COUNT(*) as total_users, AVG((SELECT COUNT(*) FROM predictions WHERE users.id = predictions.telegram_id)) as avg_predictions_per_user, MAX((SELECT COUNT(*) FROM predictions WHERE users.id = predictions.telegram_id)) as max_predictions FROM users"
             result = db.db.execute(text(sql_query)).fetchone()
             
             response += f"• Avg predictions/user: {float(result[1] or 0):.1f}\n"
@@ -827,27 +821,24 @@ FROM users
         
         response += "\n🔍 *Schema Info:*\n"
         
+        # Schema info section
         try:
-            sql_query = """
-SELECT column_name, data_type 
-FROM information_schema.columns 
-WHERE table_name = 'users' 
-ORDER BY ordinal_position
-"""
+            sql_query = "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'users' ORDER BY ordinal_position"
             result = db.db.execute(text(sql_query)).fetchall()
             
             response += "• users table columns:\n"
             for col in result[:5]:
                 response += f"  - {col[0]}: {col[1]}\n"
-        except:
+        except Exception:
             response += "• Schema info unavailable\n"
         
         response += "\n💾 *Database Info:*\n"
         
+        # Database info section
         try:
             version = db.db.execute(text("SELECT version()")).scalar()
             response += f"• PostgreSQL: {version.split(',')[0]}\n"
-        except:
+        except Exception:
             response += "• Version info unavailable\n"
         
         db.close()
