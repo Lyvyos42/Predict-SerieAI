@@ -16,6 +16,70 @@ from flask import Flask
 from threading import Thread
 import sqlite3
 
+#!/usr/bin/env python3
+"""
+⚽ SERIE AI BOT - WITH SINGLE INSTANCE ENFORCEMENT
+"""
+
+import os
+import sys
+import signal
+import time
+import atexit
+import fcntl  # For file locking
+
+# ===== SINGLE INSTANCE ENFORCEMENT =====
+def enforce_single_instance():
+    """Ensure only one instance of the bot runs at a time"""
+    lock_file = "/tmp/serie_ai_bot.lock"
+    
+    try:
+        # Try to create and lock the file
+        lock_fd = os.open(lock_file, os.O_WRONLY | os.O_CREAT)
+        
+        # Try to get exclusive lock (non-blocking)
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print("❌ ERROR: Another bot instance is already running!")
+            print("💡 Please stop it first:")
+            print("   pkill -f 'python.*bot.py'")
+            print("   or")
+            print("   rm -f /tmp/serie_ai_bot.lock")
+            sys.exit(1)
+        
+        # Write current PID to lock file
+        os.write(lock_fd, str(os.getpid()).encode())
+        
+        # Register cleanup function
+        def cleanup_lock():
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                os.close(lock_fd)
+                os.remove(lock_file)
+            except:
+                pass
+        
+        atexit.register(cleanup_lock)
+        
+        # Handle termination signals
+        def signal_handler(signum, frame):
+            cleanup_lock()
+            sys.exit(0)
+        
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+        
+        print("✅ Single instance lock acquired")
+        
+    except Exception as e:
+        print(f"❌ Failed to acquire lock: {e}")
+        sys.exit(1)
+
+# ENFORCE SINGLE INSTANCE
+enforce_single_instance()
+
+# ... rest of your imports and code ...
 # ===== DATABASE MANAGER =====
 class DatabaseManager:
     """Simple database manager with SQLite"""
