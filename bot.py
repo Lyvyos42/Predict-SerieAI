@@ -955,7 +955,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.effective_message.reply_text(
                 "❌ An error occurred. Please try again later."
             )
-    except:
+    except Exception:
         pass
 
 async def database_heartbeat():
@@ -991,20 +991,12 @@ def main():
             db_version = result.fetchone()[0]
             print(f"✅ PostgreSQL Version: {db_version}")
             
-            result = conn.execute(text("""
-                SELECT table_name 
-                FROM information_schema.tables 
-                WHERE table_schema = 'public'
-            """))
+            result = conn.execute(text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"))
             tables = [row[0] for row in result]
             print(f"✅ Tables found: {tables}")
             
             try:
-                result = conn.execute(text("""
-                    SELECT data_type 
-                    FROM information_schema.columns 
-                    WHERE table_name = 'users' AND column_name = 'telegram_id'
-                """))
+                result = conn.execute(text("SELECT data_type FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'telegram_id'"))
                 col_type = result.fetchone()
                 if col_type:
                     print(f"📊 users.telegram_id type: {col_type[0]}")
