@@ -436,13 +436,25 @@ async def value_bets_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 @access_control
 async def mystats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show user statistics - FROM DATABASE"""
+    """Show user statistics - WITH DATABASE"""
     user_id = update.effective_user.id
     first_name = update.effective_user.first_name
     
-    # ========== GET STATS FROM DATABASE ==========
+    logger.info(f"📊 Getting stats for user {user_id}")
+    
     try:
+        # Get database connection
         db = DatabaseManager()
+        
+        # First, ensure user exists in database
+        user = db.get_or_create_user(
+            telegram_id=user_id,
+            username=update.effective_user.username,
+            first_name=first_name,
+            last_name=update.effective_user.last_name
+        )
+        
+        # Get user statistics
         stats = db.get_user_stats(user_id)
         db.close()
         
@@ -483,8 +495,16 @@ _Your predictions will be saved automatically_
 """
             # Add recent predictions
             for i, pred in enumerate(stats['recent_predictions'][:3], 1):
-                result_icon = "✅" if pred.is_correct else "❌" if pred.is_correct == False else "⏳"
-                status = "Correct" if pred.is_correct else "Wrong" if pred.is_correct == False else "Pending"
+                if pred.is_correct is None:
+                    result_icon = "⏳"
+                    status = "Pending"
+                elif pred.is_correct:
+                    result_icon = "✅"
+                    status = "Correct"
+                else:
+                    result_icon = "❌"
+                    status = "Wrong"
+                
                 response += f"{i}. {pred.home_team} vs {pred.away_team} ({result_icon} {status})\n"
             
             if accuracy > 60:
@@ -494,10 +514,29 @@ _Your predictions will be saved automatically_
             else:
                 response += "\n💡 *Study the predictions more carefully.*"
         
+        logger.info(f"✅ Stats shown for user {user_id}: {total} predictions")
+        
     except Exception as e:
-        logger.error(f"❌ Database stats failed: {e}")
-        response = "❌ Could not load statistics. Please try again later."
-    # ========== END DATABASE CODE ==========
+        logger.error(f"❌ Database error in mystats: {e}", exc_info=True)
+        
+        # Fallback response
+        response = f"""
+📊 *YOUR STATISTICS*
+
+👤 User: {first_name}
+🆔 ID: `{user_id}`
+
+⚠️ *Database Connection Issue*
+
+The statistics service is temporarily unavailable.
+
+🔧 *Try these instead:*
+• `/predict Inter Milan` - Make new predictions
+• `/value` - View today's value bets
+• `/matches` - See today's matches
+
+_Error details: Database connection failed_
+"""
     
     await update.message.reply_text(response, parse_mode='Markdown')
 
@@ -761,17 +800,43 @@ def main():
     print("⚽ SERIE AI BOT - WITH DATABASE")
     print("=" * 60)
     
-    # Initialize database
+    # Initialize database with debug info
     try:
+        print("🔍 Testing database connection...")
         init_db()
-        print("✅ Database initialized successfully")
+        print("✅ Database tables created")
         
-        # Create sample data if needed
+        # Test connection
+        from sqlalchemy import text
+        from models import engine
+        
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT version()"))
+            db_version = result.fetchone()[0]
+            print(f"✅ PostgreSQL Version: {db_version}")
+            
+            # Check tables
+            result = conn.execute(text("""
+                SELECT table_name 
+                FROM information_schema.tables 
+                WHERE table_schema = 'public'
+            """))
+            tables = [row[0] for row in result]
+            print(f"✅ Tables found: {tables}")
+            
+            if 'users' in tables and 'predictions' in tables:
+                print("✅ Required tables exist")
+            else:
+                print("⚠️  Missing some tables")
+        
+        # Create sample data
         from init_database import create_sample_data
         create_sample_data()
         print("✅ Sample data created")
+        
     except Exception as e:
-        print(f"⚠️  Database initialization: {e}")
+        print(f"❌ Database initialization failed: {e}")
+        print(f"📌 DATABASE_URL: {DATABASE_URL[:50]}..." if DATABASE_URL else "📌 DATABASE_URL: Not set")
     
     if API_KEY:
         print("✅ API Key: FOUND")
@@ -779,7 +844,7 @@ def main():
         print("⚠️  API Key: NOT FOUND - Using simulation")
     
     print(f"🔒 Invite-Only Mode: {'✅ Enabled' if INVITE_ONLY else '❌ Disabled'}")
-    if ADMIN_USER_ID:
+    if ADMIN_USER_ID and ADMIN_USER_ID[0]:
         print(f"👑 Admin Users: {len(ADMIN_USER_ID)} configured")
     
     # Start Flask for Railway
@@ -795,7 +860,7 @@ def main():
     application.add_handler(CommandHandler("matches", todays_matches_command))
     application.add_handler(CommandHandler("standings", standings_command))
     application.add_handler(CommandHandler("value", value_bets_command))
-    application.add_handler(CommandHandler("mystats", mystats_command))
+    application.add_handler(CommandHandler("mystats", mystats_command))  # ADDED THIS LINE
     application.add_handler(CommandHandler("help", help_command))
     
     # Admin commands
@@ -812,7 +877,7 @@ def main():
     print("   • /matches - Today's matches")
     print("   • /standings - League standings")
     print("   • /value - Value bets from DB")
-    print("   • /mystats - Your statistics from DB")
+    print("   • /mystats - Your statistics from DB")  # ADDED THIS LINE
     print("   • /admin - Admin panel (DB stats)")
     print("=" * 60)
     print("📱 Test on Telegram with /start")
