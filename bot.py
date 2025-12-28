@@ -810,13 +810,15 @@ async def dbstats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response += "\n📈 *Performance Metrics:*\n"
         
         try:
-            result = db.db.execute(text("""
-                SELECT 
-                    COUNT(*) as total_users,
-                    AVG((SELECT COUNT(*) FROM predictions WHERE users.id = predictions.telegram_id)) as avg_predictions_per_user,
-                    MAX((SELECT COUNT(*) FROM predictions WHERE users.id = predictions.telegram_id)) as max_predictions
-                FROM users
-            """)).fetchone()
+            # FIXED: Properly indented SQL query
+            sql_query = """
+SELECT 
+    COUNT(*) as total_users,
+    AVG((SELECT COUNT(*) FROM predictions WHERE users.id = predictions.telegram_id)) as avg_predictions_per_user,
+    MAX((SELECT COUNT(*) FROM predictions WHERE users.id = predictions.telegram_id)) as max_predictions
+FROM users
+"""
+            result = db.db.execute(text(sql_query)).fetchone()
             
             response += f"• Avg predictions/user: {float(result[1] or 0):.1f}\n"
             response += f"• Max predictions/user: {result[2] or 0}\n"
@@ -826,12 +828,13 @@ async def dbstats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response += "\n🔍 *Schema Info:*\n"
         
         try:
-            result = db.db.execute(text("""
-                SELECT column_name, data_type 
-                FROM information_schema.columns 
-                WHERE table_name = 'users' 
-                ORDER BY ordinal_position
-            """)).fetchall()
+            sql_query = """
+SELECT column_name, data_type 
+FROM information_schema.columns 
+WHERE table_name = 'users' 
+ORDER BY ordinal_position
+"""
+            result = db.db.execute(text(sql_query)).fetchall()
             
             response += "• users table columns:\n"
             for col in result[:5]:
