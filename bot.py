@@ -934,31 +934,21 @@ async def show_predict_info_callback(update: Update, context: ContextTypes.DEFAU
     query = update.callback_query
     await query.answer()
     
-    text = """
-🎯 *SMART PREDICTION*
-
-How it works:
-
-AI analyzes team statistics
-
-Considers home/away advantage
-
-Evaluates recent form
-
-Calculates value bets
-
-*Quick Prediction:*
-/predict [Home Team] [Away Team]
-Example: /predict Inter Milan
-
-*DATABASE FEATURE:*
-✅ All predictions automatically saved
-✅ Track your accuracy over time
-✅ View history with /mystats
-✅ Compete with other users
-
-Using advanced AI models + PostgreSQL database
-"""
+    text = ("🎯 *SMART PREDICTION*\n\n"
+            "How it works:\n\n"
+            "AI analyzes team statistics\n\n"
+            "Considers home/away advantage\n\n"
+            "Evaluates recent form\n\n"
+            "Calculates value bets\n\n"
+            "*Quick Prediction:*\n"
+            "/predict [Home Team] [Away Team]\n"
+            "Example: /predict Inter Milan\n\n"
+            "*DATABASE FEATURE:*\n"
+            "✅ All predictions automatically saved\n"
+            "✅ Track your accuracy over time\n"
+            "✅ View history with /mystats\n"
+            "✅ Compete with other users\n\n"
+            "Using advanced AI models + PostgreSQL database")
     
     keyboard = [[InlineKeyboardButton("🏠 Main Menu", callback_data="back_to_menu")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
