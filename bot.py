@@ -760,3 +760,179 @@ Your user ID ({user_id}) is too large for the current database schema.
 ALTER TABLE users ALTER COLUMN telegram_id TYPE BIGINT;
 ALTER TABLE predictions ALTER COLUMN telegram_id TYPE BIGINT;
 ALTER TABLE bets ALTER COLUMN telegram_id TYPE BIGINT;
+async def database_heartbeat():
+    """Regular database health check."""
+    while True:
+        await asyncio.sleep(300)
+        try:
+            healthy, error = check_database_health()
+            if healthy:
+                logger.debug("✅ Database heartbeat successful")
+            else:
+                logger.warning(f"⚠️ Database heartbeat failed: {error}")
+        except Exception as e:
+            logger.error(f"❌ Heartbeat error: {e}")
+
+def main():
+    print("=" * 60)
+    print("⚽ SERIE AI BOT - WITH DATABASE (FIXED VERSION)")
+    print("=" * 60)
+    
+    try:
+        print("🔍 Testing database connection...")
+        init_db()
+        print("✅ Database tables created")
+        
+        from sqlalchemy import text
+        from sqlalchemy import create_engine
+        
+        engine = create_engine(DATABASE_URL or "sqlite:///bot.db")
+        
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT version()"))
+            db_version = result.fetchone()[0]
+            print(f"✅ PostgreSQL Version: {db_version}")
+            
+            result = conn.execute(text("""
+                SELECT table_name 
+                FROM information_schema.tables 
+                WHERE table_schema = 'public'
+            """))
+            tables = [row[0] for row in result]
+            print(f"✅ Tables found: {tables}")
+            
+            try:
+                result = conn.execute(text("""
+                    SELECT data_type 
+                    FROM information_schema.columns 
+                    WHERE table_name = 'users' AND column_name = 'telegram_id'
+                """))
+                col_type = result.fetchone()
+                if col_type:
+                    print(f"📊 users.telegram_id type: {col_type[0]}")
+                    if col_type[0] == 'integer':
+                        print("⚠️  WARNING: telegram_id is INTEGER, should be BIGINT!")
+                        print("💡 Run: ALTER TABLE users ALTER COLUMN telegram_id TYPE BIGINT;")
+            except Exception as e:
+                print(f"⚠️  Could not check column type: {e}")
+            
+            if 'users' in tables and 'predictions' in tables:
+                print("✅ Required tables exist")
+            else:
+                print("⚠️  Missing some tables")
+        
+        # Create sample data
+        try:
+            db = DatabaseManager()
+            
+            # Create sample user if none exists
+            if db.db.query(User).count() == 0:
+                sample_user = User(
+                    telegram_id=123456789,
+                    username="sample_user",
+                    first_name="Sample",
+                    last_name="User"
+                )
+                db.db.add(sample_user)
+                
+                # Create sample prediction
+                sample_prediction = Prediction(
+                    telegram_id=123456789,
+                    home_team="Inter",
+                    away_team="Milan",
+                    league="Serie A",
+                    predicted_result="1",
+                    home_prob=55.5,
+                    draw_prob=25.5,
+                    away_prob=19.0,
+                    confidence=65.5
+                )
+                db.db.add(sample_prediction)
+                
+                # Create sample value bet
+                sample_value_bet = ValueBet(
+                    telegram_id=123456789,
+                    match="Inter vs Milan",
+                    league="Serie A",
+                    bet_type="Match Result",
+                    selection="1",
+                    odds=2.10,
+                    probability=55.0,
+                    edge=15.5,
+                    confidence=0.8,
+                    recommended_stake="⭐⭐"
+                )
+                db.db.add(sample_value_bet)
+                
+                db.db.commit()
+                print("✅ Sample data created")
+            else:
+                print("✅ Data already exists")
+            
+            db.close()
+        except Exception as e:
+            print(f"⚠️  Could not create sample data: {e}")
+        
+    except Exception as e:
+        print(f"❌ Database initialization failed: {e}")
+        print(f"📌 DATABASE_URL: {DATABASE_URL[:50]}..." if DATABASE_URL else "📌 DATABASE_URL: Not set")
+    
+    if API_KEY:
+        print("✅ API Key: FOUND")
+    else:
+        print("⚠️  API Key: NOT FOUND - Using simulation")
+    
+    print(f"🔒 Invite-Only Mode: {'✅ Enabled' if INVITE_ONLY else '❌ Disabled'}")
+    if ADMIN_USER_ID and ADMIN_USER_ID[0]:
+        print(f"👑 Admin Users: {len(ADMIN_USER_ID)} configured")
+    
+    flask_thread = Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    
+    application = Application.builder().token(BOT_TOKEN).build()
+    
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("predict", quick_predict_command))
+    application.add_handler(CommandHandler("matches", todays_matches_command))
+    application.add_handler(CommandHandler("standings", standings_command))
+    application.add_handler(CommandHandler("value", value_bets_command))
+    application.add_handler(CommandHandler("mystats", mystats_command))
+    application.add_handler(CommandHandler("help", help_command))
+    
+    application.add_handler(CommandHandler("admin", admin_command))
+    application.add_handler(CommandHandler("dbstats", dbstats_command))
+    
+    application.add_handler(CallbackQueryHandler(button_handler))
+    
+    application.add_error_handler(error_handler)
+    
+    print("✅ Bot initialized with database features")
+    print("   Commands available:")
+    print("   • /start - Main menu")
+    print("   • /predict - Save predictions to DB")
+    print("   • /matches - Today's matches")
+    print("   • /standings - League standings")
+    print("   • /value - Value bets from DB")
+    print("   • /mystats - Your statistics from DB (FIXED)")
+    print("   • /help - Help and guide")
+    print("   • /admin - Admin panel (DB stats)")
+    print("   • /dbstats - Detailed DB info (Admin)")
+    print("=" * 60)
+    print("📱 Test on Telegram with /start")
+    
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.create_task(database_heartbeat())
+    
+    try:
+        application.run_polling(
+            drop_pending_updates=True,
+            allowed_updates=Update.ALL_TYPES
+        )
+    except KeyboardInterrupt:
+        print("\n👋 Bot stopped by user")
+    except Exception as e:
+        print(f"❌ Bot crashed: {e}")
+
+if __name__ == "__main__":
+    main()
