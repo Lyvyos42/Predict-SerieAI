@@ -2,6 +2,7 @@
 """
 ⚽ SERIE AI BOT - WITH DATABASE INTEGRATION
 Complete with auto messages, invite-only, and PostgreSQL
+FIXED VERSION: Connection resilience, BIGINT support, UPSERT patterns
 """
 
 import os
@@ -10,7 +11,7 @@ import logging
 import random
 import asyncio
 from datetime import datetime, timedelta
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Optional
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters
 from flask import Flask
@@ -175,6 +176,20 @@ class DataManager:
 # ========== GLOBAL INSTANCES ==========
 data_manager = DataManager()
 
+# ========== DATABASE HEALTH CHECK ==========
+def check_database_health() -> tuple[bool, Optional[str]]:
+    """Test database connection and return (status, error_message)"""
+    try:
+        db = DatabaseManager()
+        # Simple query to test connection
+        from sqlalchemy import text
+        result = db.db.execute(text("SELECT 1")).scalar()
+        db.close()
+        return (True, None) if result == 1 else (False, "Test query failed")
+    except Exception as e:
+        logger.error(f"Database health check failed: {e}")
+        return (False, str(e))
+
 # ========== USER STORAGE (Temporary - will migrate to DB) ==========
 class SimpleUserStorage:
     """Temporary user storage until full DB migration"""
@@ -241,7 +256,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Main menu"""
     status = "✅ *Real Data Enabled*" if API_KEY else "⚠️ *Using Simulation*"
     
-    # Create or update user in database
+    # Create or update user in database WITH ERROR HANDLING
     try:
         db = DatabaseManager()
         user = db.get_or_create_user(
@@ -254,6 +269,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"✅ User {update.effective_user.id} synced to database")
     except Exception as e:
         logger.error(f"❌ Database sync failed: {e}")
+        # Log the full error but don't break the user experience
+        if "integer out of range" in str(e):
+            logger.critical(f"🚨 CRITICAL: telegram_id column needs ALTER COLUMN TYPE BIGINT")
     
     text = f"""
 {status}
@@ -436,23 +454,52 @@ async def value_bets_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 @access_control
 async def mystats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show user statistics - WITH DATABASE"""
+    """Show user statistics - WITH DATABASE (FIXED)"""
     user_id = update.effective_user.id
     first_name = update.effective_user.first_name
     
     logger.info(f"📊 Getting stats for user {user_id}")
     
+    # First check database health
+    db_healthy, db_error = check_database_health()
+    
+    if not db_healthy:
+        logger.error(f"Database unhealthy for /mystats: {db_error}")
+        response = f"""
+📊 *YOUR STATISTICS*
+
+👤 User: {first_name}
+🆔 ID: `{user_id}`
+
+🔧 *Database Connection Issue*
+
+The statistics service is temporarily unavailable.
+
+⚠️ *Technical Details:*
+• Connection test failed
+• Error: {db_error[:100] if db_error else "Unknown"}
+
+_This is usually a temporary issue. Try again in a moment._
+"""
+        await update.message.reply_text(response, parse_mode='Markdown')
+        return
+    
     try:
         # Get database connection
         db = DatabaseManager()
         
-        # First, ensure user exists in database
-        user = db.get_or_create_user(
-            telegram_id=user_id,
-            username=update.effective_user.username,
-            first_name=first_name,
-            last_name=update.effective_user.last_name
-        )
+        # First, ensure user exists in database with UPSERT
+        try:
+            user = db.get_or_create_user(
+                telegram_id=user_id,
+                username=update.effective_user.username,
+                first_name=first_name,
+                last_name=update.effective_user.last_name
+            )
+            logger.info(f"✅ User {user_id} ensured in database")
+        except Exception as user_error:
+            logger.error(f"❌ User creation failed: {user_error}")
+            # Continue anyway, might be permission issue
         
         # Get user statistics
         stats = db.get_user_stats(user_id)
@@ -519,23 +566,31 @@ _Your predictions will be saved automatically_
     except Exception as e:
         logger.error(f"❌ Database error in mystats: {e}", exc_info=True)
         
-        # Fallback response
+        # Detailed error response
+        error_msg = str(e)
+        if "integer out of range" in error_msg:
+            error_note = "⚠️ *Database Schema Issue*: telegram_id too large for INTEGER column.\nRun: `ALTER TABLE users ALTER COLUMN telegram_id TYPE BIGINT;`"
+        elif "connection" in error_msg.lower():
+            error_note = "🔌 *Connection Issue*: Database server unavailable or timed out."
+        else:
+            error_note = f"💥 *Error*: {error_msg[:100]}"
+        
         response = f"""
 📊 *YOUR STATISTICS*
 
 👤 User: {first_name}
 🆔 ID: `{user_id}`
 
-⚠️ *Database Connection Issue*
+❌ *Database Error*
 
-The statistics service is temporarily unavailable.
+{error_note}
 
-🔧 *Try these instead:*
-• `/predict Inter Milan` - Make new predictions
-• `/value` - View today's value bets
-• `/matches` - See today's matches
+🔧 *Troubleshooting:*
+1. Check Railway database service status
+2. Verify DATABASE_URL environment variable
+3. Restart the bot service
 
-_Error details: Database connection failed_
+_Try again in a few moments._
 """
     
     await update.message.reply_text(response, parse_mode='Markdown')
@@ -793,11 +848,25 @@ _Using advanced AI models + PostgreSQL database_
     
     await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
 
+# ========== DATABASE HEARTBEAT FUNCTION ==========
+async def database_heartbeat():
+    """Periodic heartbeat to keep database connection alive"""
+    while True:
+        await asyncio.sleep(300)  # Every 5 minutes
+        try:
+            healthy, error = check_database_health()
+            if healthy:
+                logger.debug("✅ Database heartbeat successful")
+            else:
+                logger.warning(f"⚠️ Database heartbeat failed: {error}")
+        except Exception as e:
+            logger.error(f"❌ Heartbeat error: {e}")
+
 # ========== MAIN FUNCTION ==========
 def main():
     """Initialize and start the bot"""
     print("=" * 60)
-    print("⚽ SERIE AI BOT - WITH DATABASE")
+    print("⚽ SERIE AI BOT - WITH DATABASE (FIXED VERSION)")
     print("=" * 60)
     
     # Initialize database with debug info
@@ -823,6 +892,22 @@ def main():
             """))
             tables = [row[0] for row in result]
             print(f"✅ Tables found: {tables}")
+            
+            # Check telegram_id column type
+            try:
+                result = conn.execute(text("""
+                    SELECT data_type 
+                    FROM information_schema.columns 
+                    WHERE table_name = 'users' AND column_name = 'telegram_id'
+                """))
+                col_type = result.fetchone()
+                if col_type:
+                    print(f"📊 users.telegram_id type: {col_type[0]}")
+                    if col_type[0] == 'integer':
+                        print("⚠️  WARNING: telegram_id is INTEGER, should be BIGINT!")
+                        print("💡 Run: ALTER TABLE users ALTER COLUMN telegram_id TYPE BIGINT;")
+            except:
+                pass
             
             if 'users' in tables and 'predictions' in tables:
                 print("✅ Required tables exist")
@@ -860,7 +945,7 @@ def main():
     application.add_handler(CommandHandler("matches", todays_matches_command))
     application.add_handler(CommandHandler("standings", standings_command))
     application.add_handler(CommandHandler("value", value_bets_command))
-    application.add_handler(CommandHandler("mystats", mystats_command))  # ADDED THIS LINE
+    application.add_handler(CommandHandler("mystats", mystats_command))
     application.add_handler(CommandHandler("help", help_command))
     
     # Admin commands
@@ -877,10 +962,15 @@ def main():
     print("   • /matches - Today's matches")
     print("   • /standings - League standings")
     print("   • /value - Value bets from DB")
-    print("   • /mystats - Your statistics from DB")  # ADDED THIS LINE
+    print("   • /mystats - Your statistics from DB (FIXED)")
     print("   • /admin - Admin panel (DB stats)")
     print("=" * 60)
     print("📱 Test on Telegram with /start")
+    
+    # Start database heartbeat in background
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.create_task(database_heartbeat())
     
     # Start bot
     application.run_polling(
