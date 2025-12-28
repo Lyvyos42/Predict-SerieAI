@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
 ⚽ SERIE AI BOT - WITH DATABASE INTEGRATION
-Complete with auto messages, invite-only, and PostgreSQL
-FIXED VERSION: Connection resilience, BIGINT support, UPSERT patterns
+COMPLETE FIXED VERSION: Schema fixes + callback handling
 """
 
 import os
@@ -11,7 +10,7 @@ import logging
 import random
 import asyncio
 from datetime import datetime, timedelta
-from typing import Dict, List, Set, Optional
+from typing import Dict, List, Set, Optional, Tuple
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters
 from flask import Flask
@@ -177,7 +176,7 @@ class DataManager:
 data_manager = DataManager()
 
 # ========== DATABASE HEALTH CHECK ==========
-def check_database_health() -> tuple[bool, Optional[str]]:
+def check_database_health() -> Tuple[bool, Optional[str]]:
     """Test database connection and return (status, error_message)"""
     try:
         db = DatabaseManager()
@@ -220,10 +219,19 @@ user_storage = SimpleUserStorage()
 def access_control(func):
     """Decorator to check if user is allowed"""
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
-        user_id = update.effective_user.id
+        # Get user_id from either message or callback_query
+        if update.message:
+            user_id = update.message.from_user.id
+        elif update.callback_query:
+            user_id = update.callback_query.from_user.id
+        else:
+            # Can't determine user, reject
+            if update.message:
+                await update.message.reply_text("❌ Cannot identify user.")
+            return
         
         if not user_storage.is_user_allowed(user_id):
-            # Check for invite code
+            # Check for invite code in message
             if update.message and update.message.text:
                 if update.message.text.startswith('/start'):
                     parts = update.message.text.split()
@@ -236,7 +244,15 @@ def access_control(func):
                         )
                         return
             
-            await update.message.reply_text(
+            # Send access denied message
+            if update.message:
+                target = update.message
+            elif update.callback_query:
+                target = update.callback_query.message
+            else:
+                return
+            
+            await target.reply_text(
                 "🔒 *Access Restricted*\n\n"
                 "This bot is invitation-only.\n"
                 "Please contact the administrator for access.\n\n"
@@ -250,6 +266,15 @@ def access_control(func):
     
     return wrapper
 
+# ========== HELPER: GET MESSAGE OBJECT ==========
+def get_message_object(update: Update):
+    """Get message object from either update.message or update.callback_query"""
+    if update.message:
+        return update.message
+    elif update.callback_query:
+        return update.callback_query.message
+    return None
+
 # ========== COMMAND HANDLERS ==========
 @access_control
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -259,14 +284,24 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Create or update user in database WITH ERROR HANDLING
     try:
         db = DatabaseManager()
-        user = db.get_or_create_user(
-            telegram_id=update.effective_user.id,
-            username=update.effective_user.username,
-            first_name=update.effective_user.first_name,
-            last_name=update.effective_user.last_name
-        )
+        # Get user info from appropriate source
+        if update.message:
+            user_info = update.message.from_user
+        elif update.callback_query:
+            user_info = update.callback_query.from_user
+        else:
+            user_info = None
+            
+        if user_info:
+            user = db.get_or_create_user(
+                telegram_id=user_info.id,
+                username=user_info.username,
+                first_name=user_info.first_name,
+                last_name=user_info.last_name
+            )
         db.close()
-        logger.info(f"✅ User {update.effective_user.id} synced to database")
+        if user_info:
+            logger.info(f"✅ User {user_info.id} synced to database")
     except Exception as e:
         logger.error(f"❌ Database sync failed: {e}")
         # Log the full error but don't break the user experience
@@ -300,9 +335,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    if update.message:
-        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
-    else:
+    message = get_message_object(update)
+    if message:
+        await message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+    elif update.callback_query:
         await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
 
 @access_control
@@ -396,7 +432,9 @@ async def todays_matches_command(update: Update, context: ContextTypes.DEFAULT_T
     
     response += f"_Total: {len(matches)} matches_"
     
-    await update.message.reply_text(response, parse_mode='Markdown')
+    message = get_message_object(update)
+    if message:
+        await message.reply_text(response, parse_mode='Markdown')
 
 @access_control
 async def standings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -411,15 +449,22 @@ async def standings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await update.message.reply_text(
-        "🏆 *Select League Standings:*",
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
-    )
+    message = get_message_object(update)
+    if message:
+        await message.reply_text(
+            "🏆 *Select League Standings:*",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
 
 @access_control
 async def value_bets_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Value bets command - FROM DATABASE"""
+    # Get message object for reply
+    message = get_message_object(update)
+    if not message:
+        return
+    
     # ========== GET FROM DATABASE ==========
     try:
         db = DatabaseManager()
@@ -428,7 +473,7 @@ async def value_bets_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         if not bets:
             response = "💎 *NO VALUE BETS TODAY*\n\nNo strong value bets identified for today."
-            await update.message.reply_text(response, parse_mode='Markdown')
+            await message.reply_text(response, parse_mode='Markdown')
             return
         
         response = "💎 *TODAY'S TOP VALUE BETS*\n\n"
@@ -450,13 +495,27 @@ async def value_bets_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         response = "❌ Could not load value bets. Please try again later."
     # ========== END DATABASE CODE ==========
     
-    await update.message.reply_text(response, parse_mode='Markdown')
+    await message.reply_text(response, parse_mode='Markdown')
 
 @access_control
 async def mystats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show user statistics - WITH DATABASE (FIXED)"""
-    user_id = update.effective_user.id
-    first_name = update.effective_user.first_name
+    # Get message object and user info
+    message = get_message_object(update)
+    if not message:
+        return
+    
+    # Get user info from appropriate source
+    if update.message:
+        user_info = update.message.from_user
+    elif update.callback_query:
+        user_info = update.callback_query.from_user
+    else:
+        await message.reply_text("❌ Cannot identify user.")
+        return
+    
+    user_id = user_info.id
+    first_name = user_info.first_name or "User"
     
     logger.info(f"📊 Getting stats for user {user_id}")
     
@@ -481,7 +540,7 @@ The statistics service is temporarily unavailable.
 
 _This is usually a temporary issue. Try again in a moment._
 """
-        await update.message.reply_text(response, parse_mode='Markdown')
+        await message.reply_text(response, parse_mode='Markdown')
         return
     
     try:
@@ -492,491 +551,26 @@ _This is usually a temporary issue. Try again in a moment._
         try:
             user = db.get_or_create_user(
                 telegram_id=user_id,
-                username=update.effective_user.username,
-                first_name=first_name,
-                last_name=update.effective_user.last_name
+                username=user_info.username,
+                first_name=user_info.first_name,
+                last_name=user_info.last_name
             )
             logger.info(f"✅ User {user_id} ensured in database")
         except Exception as user_error:
             logger.error(f"❌ User creation failed: {user_error}")
-            # Continue anyway, might be permission issue
-        
-        # Get user statistics
-        stats = db.get_user_stats(user_id)
-        db.close()
-        
-        total = stats['total_predictions']
-        correct = stats['correct_predictions']
-        accuracy = stats['accuracy']
-        
-        if total == 0:
-            response = f"""
+            # Check if it's the integer overflow error
+            if "integer out of range" in str(user_error):
+                logger.critical("🚨 DATABASE SCHEMA ERROR: telegram_id is INTEGER, needs BIGINT")
+                response = f"""
 📊 *YOUR STATISTICS*
 
 👤 User: {first_name}
 🆔 ID: `{user_id}`
 
-📈 *Performance:*
-• Total Predictions: 0
-• Correct Predictions: 0  
-• Accuracy Rate: 0%
+🚨 *DATABASE SCHEMA ERROR*
 
-🎯 *Get started with:*
-`/predict Inter Milan`
+Your user ID ({user_id}) is too large for the current database schema.
 
-_Your predictions will be saved automatically_
-"""
-        else:
-            response = f"""
-📊 *YOUR STATISTICS*
-
-👤 User: {first_name}
-🆔 ID: `{user_id}`
-
-📈 *Performance:*
-• Total Predictions: {total}
-• Correct Predictions: {correct}
-• Accuracy Rate: {accuracy}%
-
-🎯 *Recent Predictions:*
-"""
-            # Add recent predictions
-            for i, pred in enumerate(stats['recent_predictions'][:3], 1):
-                if pred.is_correct is None:
-                    result_icon = "⏳"
-                    status = "Pending"
-                elif pred.is_correct:
-                    result_icon = "✅"
-                    status = "Correct"
-                else:
-                    result_icon = "❌"
-                    status = "Wrong"
-                
-                response += f"{i}. {pred.home_team} vs {pred.away_team} ({result_icon} {status})\n"
-            
-            if accuracy > 60:
-                response += "\n🏆 *Excellent accuracy! Keep it up!*"
-            elif accuracy > 50:
-                response += "\n👍 *Good work! Room for improvement.*"
-            else:
-                response += "\n💡 *Study the predictions more carefully.*"
-        
-        logger.info(f"✅ Stats shown for user {user_id}: {total} predictions")
-        
-    except Exception as e:
-        logger.error(f"❌ Database error in mystats: {e}", exc_info=True)
-        
-        # Detailed error response
-        error_msg = str(e)
-        if "integer out of range" in error_msg:
-            error_note = "⚠️ *Database Schema Issue*: telegram_id too large for INTEGER column.\nRun: `ALTER TABLE users ALTER COLUMN telegram_id TYPE BIGINT;`"
-        elif "connection" in error_msg.lower():
-            error_note = "🔌 *Connection Issue*: Database server unavailable or timed out."
-        else:
-            error_note = f"💥 *Error*: {error_msg[:100]}"
-        
-        response = f"""
-📊 *YOUR STATISTICS*
-
-👤 User: {first_name}
-🆔 ID: `{user_id}`
-
-❌ *Database Error*
-
-{error_note}
-
-🔧 *Troubleshooting:*
-1. Check Railway database service status
-2. Verify DATABASE_URL environment variable
-3. Restart the bot service
-
-_Try again in a few moments._
-"""
-    
-    await update.message.reply_text(response, parse_mode='Markdown')
-
-@access_control
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Text command: /help"""
-    help_text = """
-🤖 *SERIE AI BOT - COMPLETE HELP GUIDE*
-
-*MAIN COMMANDS:*
-/start - Show main menu with all features
-/predict [team1] [team2] - Quick match prediction (saves to history)
-/matches - Today's football matches
-/standings - League standings
-/value - Today's best value bets (from database)
-/mystats - Your prediction statistics (from database)
-/help - Show this help message
-
-*DATABASE FEATURES:*
-✅ All predictions saved automatically
-✅ Track your accuracy over time
-✅ Value bets stored in PostgreSQL
-✅ User profiles with statistics
-
-*PREDICTION FEATURES:*
-• Match Result (1X2) with probabilities
-• Expected goals analysis
-• Value bet identification
-• Multiple leagues coverage
-• AI-powered predictions
-
-*LEAGUES COVERED:*
-🇮🇹 Serie A, 🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League
-🇪🇸 La Liga, 🇩🇪 Bundesliga
-"""
-    
-    await update.message.reply_text(help_text, parse_mode='Markdown')
-
-# ========== ADMIN COMMANDS ==========
-@access_control
-async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin panel"""
-    user_id = update.effective_user.id
-    
-    if str(user_id) not in ADMIN_USER_ID:
-        await update.message.reply_text("❌ Admin access required.")
-        return
-    
-    # ========== DATABASE STATS ==========
-    try:
-        db = DatabaseManager()
-        total_users = db.db.query(User).count()
-        total_predictions = db.db.query(Prediction).count()
-        total_value_bets = db.db.query(ValueBet).filter(ValueBet.is_active == True).count()
-        db.close()
-    except Exception as e:
-        logger.error(f"❌ Database stats failed: {e}")
-        total_users = total_predictions = total_value_bets = "N/A"
-    
-    response = f"""
-🔐 *ADMIN PANEL*
-
-📊 *DATABASE STATISTICS:*
-• Total Users: {total_users}
-• Total Predictions: {total_predictions}
-• Active Value Bets: {total_value_bets}
-• Invite-Only Mode: {'✅ Enabled' if INVITE_ONLY else '❌ Disabled'}
-
-⚙️ *ADMIN COMMANDS:*
-/dbstats - Detailed database statistics
-/adduser [id] - Add user to allowed list
-/listusers - List all allowed users
-/broadcast [msg] - Send message to all users
-
-📈 *USER MANAGEMENT:*
-• Use /adduser to grant access
-• Invite code: `invite123`
-• Database stores all user activity
-
-💾 *DATABASE INFO:*
-• PostgreSQL on Railway
-• Tables: users, predictions, value_bets
-• Auto-saves all predictions
-"""
-    
-    await update.message.reply_text(response, parse_mode='Markdown')
-
-@access_control
-async def dbstats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Detailed database statistics"""
-    user_id = update.effective_user.id
-    
-    if str(user_id) not in ADMIN_USER_ID:
-        await update.message.reply_text("❌ Admin access required.")
-        return
-    
-    try:
-        db = DatabaseManager()
-        
-        # Get detailed stats
-        total_users = db.db.query(User).count()
-        active_users = db.db.query(User).filter(User.is_active == True).count()
-        premium_users = db.db.query(User).filter(User.is_premium == True).count()
-        
-        total_predictions = db.db.query(Prediction).count()
-        correct_predictions = db.db.query(Prediction).filter(Prediction.is_correct == True).count()
-        pending_predictions = db.db.query(Prediction).filter(Prediction.is_correct == None).count()
-        
-        total_value_bets = db.db.query(ValueBet).count()
-        active_value_bets = db.db.query(ValueBet).filter(ValueBet.is_active == True).count()
-        
-        # Recent activity
-        recent_users = db.db.query(User).order_by(User.last_seen.desc()).limit(5).all()
-        
-        db.close()
-        
-        # Calculate accuracy
-        accuracy = (correct_predictions / (total_predictions - pending_predictions) * 100) if (total_predictions - pending_predictions) > 0 else 0
-        
-        response = f"""
-📊 *DETAILED DATABASE STATISTICS*
-
-👥 *USERS:*
-• Total Users: {total_users}
-• Active Users: {active_users}
-• Premium Users: {premium_users}
-
-🎯 *PREDICTIONS:*
-• Total Predictions: {total_predictions}
-• Correct Predictions: {correct_predictions}
-• Pending Results: {pending_predictions}
-• System Accuracy: {accuracy:.1f}%
-
-💎 *VALUE BETS:*
-• Total Value Bets: {total_value_bets}
-• Active Value Bets: {active_value_bets}
-
-👤 *RECENTLY ACTIVE USERS:*
-"""
-        for i, user in enumerate(recent_users, 1):
-            last_seen = user.last_seen.strftime("%Y-%m-%d %H:%M") if user.last_seen else "Never"
-            response += f"{i}. {user.first_name} (ID: {user.telegram_id}) - {last_seen}\n"
-        
-        response += f"\n📅 *Last Updated:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        
-    except Exception as e:
-        logger.error(f"❌ Database stats failed: {e}")
-        response = f"❌ Could not load database statistics: {e}"
-    
-    await update.message.reply_text(response, parse_mode='Markdown')
-
-# ========== BUTTON HANDLERS ==========
-@access_control
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle all button presses"""
-    query = update.callback_query
-    await query.answer()
-    
-    data = query.data
-    
-    if data == "show_matches":
-        await todays_matches_command(update, context)
-        await start_command(update, context)
-    
-    elif data == "show_standings_menu":
-        await standings_command(update, context)
-    
-    elif data.startswith("standings_"):
-        league_code = data.split("_")[1]
-        await show_standings(update, league_code)
-    
-    elif data == "show_predict_info":
-        await show_predict_info_callback(update, context)
-    
-    elif data == "show_value_bets":
-        await value_bets_command(update, context)
-        await start_command(update, context)
-    
-    elif data == "user_stats":
-        await mystats_command(update, context)
-        await start_command(update, context)
-    
-    elif data == "show_help":
-        await help_command(update, context)
-        await start_command(update, context)
-    
-    elif data == "back_to_menu":
-        await start_command(update, context)
-
-# ========== HELPER FUNCTIONS ==========
-async def show_standings(update: Update, league_code: str):
-    """Show standings for a league"""
-    query = update.callback_query
-    await query.answer()
-    
-    standings_data = data_manager.get_standings(league_code)
-    
-    if not standings_data:
-        await query.edit_message_text("❌ Could not fetch standings.")
-        return
-    
-    league_name = standings_data['league_name']
-    standings = standings_data['standings']
-    
-    response = f"🏆 *{league_name} STANDINGS*\n\n"
-    response += "```\n"
-    response += " #  Team           P   W   D   L   GF  GA  GD  Pts\n"
-    response += "--- ------------- --- --- --- --- --- --- --- ---\n"
-    
-    for team in standings[:10]:
-        team_name = team['team'][:13]
-        response += f"{team['position']:2}  {team_name:13} {team['played']:3} {team['won']:3} {team['draw']:3} {team['lost']:3} {team['gf']:3} {team['ga']:3} {team['gd']:3} {team['points']:4}\n"
-    
-    response += "```\n"
-    response += f"_Showing top {min(10, len(standings))} of {len(standings)} teams_\n"
-    
-    keyboard = [
-        [InlineKeyboardButton("🔙 Back to Standings", callback_data="show_standings_menu")],
-        [InlineKeyboardButton("🏠 Main Menu", callback_data="back_to_menu")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(response, reply_markup=reply_markup, parse_mode='Markdown')
-
-async def show_predict_info_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Callback: Smart Prediction button"""
-    query = update.callback_query
-    await query.answer()
-    
-    text = """
-🎯 *SMART PREDICTION*
-
-*How it works:*
-1. AI analyzes team statistics
-2. Considers home/away advantage  
-3. Evaluates recent form
-4. Calculates value bets
-
-*Quick Prediction:*
-`/predict [Home Team] [Away Team]`
-Example: `/predict Inter Milan`
-
-*DATABASE FEATURE:*
-✅ All predictions automatically saved
-✅ Track your accuracy over time
-✅ View history with /mystats
-✅ Compete with other users
-
-_Using advanced AI models + PostgreSQL database_
-"""
-    
-    keyboard = [[InlineKeyboardButton("🏠 Main Menu", callback_data="back_to_menu")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
-
-# ========== DATABASE HEARTBEAT FUNCTION ==========
-async def database_heartbeat():
-    """Periodic heartbeat to keep database connection alive"""
-    while True:
-        await asyncio.sleep(300)  # Every 5 minutes
-        try:
-            healthy, error = check_database_health()
-            if healthy:
-                logger.debug("✅ Database heartbeat successful")
-            else:
-                logger.warning(f"⚠️ Database heartbeat failed: {error}")
-        except Exception as e:
-            logger.error(f"❌ Heartbeat error: {e}")
-
-# ========== MAIN FUNCTION ==========
-def main():
-    """Initialize and start the bot"""
-    print("=" * 60)
-    print("⚽ SERIE AI BOT - WITH DATABASE (FIXED VERSION)")
-    print("=" * 60)
-    
-    # Initialize database with debug info
-    try:
-        print("🔍 Testing database connection...")
-        init_db()
-        print("✅ Database tables created")
-        
-        # Test connection
-        from sqlalchemy import text
-        from models import engine
-        
-        with engine.connect() as conn:
-            result = conn.execute(text("SELECT version()"))
-            db_version = result.fetchone()[0]
-            print(f"✅ PostgreSQL Version: {db_version}")
-            
-            # Check tables
-            result = conn.execute(text("""
-                SELECT table_name 
-                FROM information_schema.tables 
-                WHERE table_schema = 'public'
-            """))
-            tables = [row[0] for row in result]
-            print(f"✅ Tables found: {tables}")
-            
-            # Check telegram_id column type
-            try:
-                result = conn.execute(text("""
-                    SELECT data_type 
-                    FROM information_schema.columns 
-                    WHERE table_name = 'users' AND column_name = 'telegram_id'
-                """))
-                col_type = result.fetchone()
-                if col_type:
-                    print(f"📊 users.telegram_id type: {col_type[0]}")
-                    if col_type[0] == 'integer':
-                        print("⚠️  WARNING: telegram_id is INTEGER, should be BIGINT!")
-                        print("💡 Run: ALTER TABLE users ALTER COLUMN telegram_id TYPE BIGINT;")
-            except:
-                pass
-            
-            if 'users' in tables and 'predictions' in tables:
-                print("✅ Required tables exist")
-            else:
-                print("⚠️  Missing some tables")
-        
-        # Create sample data
-        from init_database import create_sample_data
-        create_sample_data()
-        print("✅ Sample data created")
-        
-    except Exception as e:
-        print(f"❌ Database initialization failed: {e}")
-        print(f"📌 DATABASE_URL: {DATABASE_URL[:50]}..." if DATABASE_URL else "📌 DATABASE_URL: Not set")
-    
-    if API_KEY:
-        print("✅ API Key: FOUND")
-    else:
-        print("⚠️  API Key: NOT FOUND - Using simulation")
-    
-    print(f"🔒 Invite-Only Mode: {'✅ Enabled' if INVITE_ONLY else '❌ Disabled'}")
-    if ADMIN_USER_ID and ADMIN_USER_ID[0]:
-        print(f"👑 Admin Users: {len(ADMIN_USER_ID)} configured")
-    
-    # Start Flask for Railway
-    flask_thread = Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    
-    # Build bot application
-    application = Application.builder().token(BOT_TOKEN).build()
-    
-    # Register command handlers
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("predict", quick_predict_command))
-    application.add_handler(CommandHandler("matches", todays_matches_command))
-    application.add_handler(CommandHandler("standings", standings_command))
-    application.add_handler(CommandHandler("value", value_bets_command))
-    application.add_handler(CommandHandler("mystats", mystats_command))
-    application.add_handler(CommandHandler("help", help_command))
-    
-    # Admin commands
-    application.add_handler(CommandHandler("admin", admin_command))
-    application.add_handler(CommandHandler("dbstats", dbstats_command))
-    
-    # Register button handler
-    application.add_handler(CallbackQueryHandler(button_handler))
-    
-    print("✅ Bot initialized with database features")
-    print("   Commands available:")
-    print("   • /start - Main menu")
-    print("   • /predict - Save predictions to DB")
-    print("   • /matches - Today's matches")
-    print("   • /standings - League standings")
-    print("   • /value - Value bets from DB")
-    print("   • /mystats - Your statistics from DB (FIXED)")
-    print("   • /admin - Admin panel (DB stats)")
-    print("=" * 60)
-    print("📱 Test on Telegram with /start")
-    
-    # Start database heartbeat in background
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.create_task(database_heartbeat())
-    
-    # Start bot
-    application.run_polling(
-        drop_pending_updates=True,
-        allowed_updates=Update.ALL_TYPES
-    )
-
-if __name__ == "__main__":
-    main()
+🔧 *ADMIN MUST RUN:*
+```sql
+ALTER TABLE users ALTER COLUMN telegram_id TYPE BIGINT;
