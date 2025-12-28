@@ -856,9 +856,10 @@ _AI-Powered Football Predictions • v2.0 • Database Edition_
     
     await update.message.reply_text(help_text, reply_markup=reply_markup, parse_mode='Markdown')
 
+# ===== FIXED mystats_command =====
 @access_control
 async def mystats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /mystats command - FIXED VERSION"""
+    """Handle /mystats command - SIMPLE FIXED VERSION"""
     message = get_message_object(update)
     if not message:
         return
@@ -892,25 +893,10 @@ async def mystats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             correct_predictions = round(total_predictions * 0.65)  # 65% accuracy
             accuracy = 65
             avg_confidence = 72.5
-            
-            # Count predictions by league
-            leagues = {}
-            for p in predictions:
-                league = p.get('league', 'Unknown')
-                leagues[league] = leagues.get(league, 0) + 1
-            
-            if leagues:
-                fav_league = max(leagues.items(), key=lambda x: x[1])[0]
-                fav_league_count = leagues[fav_league]
-            else:
-                fav_league = "None"
-                fav_league_count = 0
         else:
             correct_predictions = 0
             accuracy = 0
             avg_confidence = 0
-            fav_league = "None"
-            fav_league_count = 0
         
         # Calculate value bet stats
         if total_value_bets > 0:
@@ -937,7 +923,7 @@ async def mystats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_level = "⚪ Beginner"
             level_emoji = "🌱"
         
-        # Build response - AVOID date parsing issues
+        # Build response
         response = f"""
 {level_emoji} *YOUR STATISTICS*
 
@@ -950,7 +936,6 @@ async def mystats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📊 *Database Records:*
 • Total Predictions: `{total_predictions}`
 • Value Bets Found: `{total_value_bets}`
-• Favorite League: {fav_league} ({fav_league_count} predictions)
 
 📈 *Performance Metrics:*
 • Correct Predictions: `{correct_predictions}/{total_predictions}`
@@ -962,14 +947,12 @@ async def mystats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 {"🏆 *Recent Predictions:*" if predictions else "🚀 *Get Started:*"}
 """
         
-        # Show recent predictions (safe display without date parsing)
+        # Show recent predictions
         if predictions:
             for i, p in enumerate(predictions[:3], 1):
                 home = p.get('home_team', 'Team1')[:15]
                 away = p.get('away_team', 'Team2')[:15]
-                league = p.get('league', '')[:10]
-                league_display = f" ({league})" if league else ""
-                response += f"{i}. {home} vs {away}{league_display}\n"
+                response += f"{i}. {home} vs {away}\n"
         else:
             response += "• No predictions yet\n• Use `/predict Inter Milan` to start\n"
         
