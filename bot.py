@@ -1,6 +1,7 @@
+```python
 #!/usr/bin/env python3
 """
-⚽ SERIE AI BOT - PRODUCTION VERSION WITH FIXED DATABASE
+⚽ SERIE AI BOT - STABLE VERSION
 """
 
 import os
@@ -16,70 +17,6 @@ from flask import Flask
 from threading import Thread
 import sqlite3
 
-#!/usr/bin/env python3
-"""
-⚽ SERIE AI BOT - WITH SINGLE INSTANCE ENFORCEMENT
-"""
-
-import os
-import sys
-import signal
-import time
-import atexit
-import fcntl  # For file locking
-
-# ===== SINGLE INSTANCE ENFORCEMENT =====
-def enforce_single_instance():
-    """Ensure only one instance of the bot runs at a time"""
-    lock_file = "/tmp/serie_ai_bot.lock"
-    
-    try:
-        # Try to create and lock the file
-        lock_fd = os.open(lock_file, os.O_WRONLY | os.O_CREAT)
-        
-        # Try to get exclusive lock (non-blocking)
-        try:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            print("❌ ERROR: Another bot instance is already running!")
-            print("💡 Please stop it first:")
-            print("   pkill -f 'python.*bot.py'")
-            print("   or")
-            print("   rm -f /tmp/serie_ai_bot.lock")
-            sys.exit(1)
-        
-        # Write current PID to lock file
-        os.write(lock_fd, str(os.getpid()).encode())
-        
-        # Register cleanup function
-        def cleanup_lock():
-            try:
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
-                os.close(lock_fd)
-                os.remove(lock_file)
-            except:
-                pass
-        
-        atexit.register(cleanup_lock)
-        
-        # Handle termination signals
-        def signal_handler(signum, frame):
-            cleanup_lock()
-            sys.exit(0)
-        
-        signal.signal(signal.SIGINT, signal_handler)
-        signal.signal(signal.SIGTERM, signal_handler)
-        
-        print("✅ Single instance lock acquired")
-        
-    except Exception as e:
-        print(f"❌ Failed to acquire lock: {e}")
-        sys.exit(1)
-
-# ENFORCE SINGLE INSTANCE
-enforce_single_instance()
-
-# ... rest of your imports and code ...
 # ===== DATABASE MANAGER =====
 class DatabaseManager:
     """Simple database manager with SQLite"""
@@ -314,41 +251,6 @@ class DatabaseManager:
             
         except Exception as e:
             logger.error(f"❌ Get value bets failed: {e}")
-            return []
-    
-    def log_system_event(self, event_type, message, level="INFO"):
-        """Log system event"""
-        try:
-            self.cursor.execute(
-                '''INSERT INTO system_logs (event_type, message, level, created_at)
-                VALUES (?, ?, ?, ?)''',
-                (event_type, message, level, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-            )
-            self.conn.commit()
-        except Exception as e:
-            logger.error(f"❌ System log failed: {e}")
-    
-    def get_todays_value_bets(self):
-        """Get today's value bets"""
-        try:
-            today = datetime.now().strftime('%Y-%m-%d')
-            self.cursor.execute(
-                '''SELECT * FROM value_bets 
-                WHERE DATE(created_at) = DATE(?) 
-                AND is_active = 1
-                ORDER BY edge DESC''',
-                (today,)
-            )
-            rows = self.cursor.fetchall()
-            
-            value_bets = []
-            for row in rows:
-                value_bets.append(dict(row))
-            
-            return value_bets
-            
-        except Exception as e:
-            logger.error(f"❌ Get today's value bets failed: {e}")
             return []
     
     def close(self):
@@ -886,6 +788,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 `/standings` - League tables (Serie A, PL, etc.)
 `/value` - Today's best value bets
 `/mystats` - Your personal statistics
+`/admin` - Check admin status
 
 *Examples:*
 `/predict Inter Milan`
@@ -898,17 +801,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 3. Identifies value bets with positive edge
 4. Recommends optimal stake based on confidence
 
-*💎 Value Betting Strategy:*
-• Only bet when edge > 3%
-• Use recommended stake (⭐ = small, ⭐⭐ = medium)
-• Track all bets in your statistics
-• Never bet more than 5% of your bankroll
-
-*🔧 Technical Info:*
-• Database: All predictions saved
-• Updates: Real-time when API available
-• Simulation: Uses advanced algorithms when offline
-
 *❓ Need Help?*
 Contact admin or use feedback feature.
 
@@ -919,107 +811,7 @@ _AI-Powered Football Predictions • v2.0 • Database Edition_
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(help_text, reply_markup=reply_markup, parse_mode='Markdown')
-@access_control
-async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Check admin status and list admins"""
-    user_id = update.effective_user.id
-    first_name = update.effective_user.first_name or "User"
-    
-    # Check if user is admin
-    is_admin = user_id in user_storage.allowed_users
-    
-    response = f"""
-🔐 *ADMIN STATUS*
 
-👤 Your ID: `{user_id}`
-👤 Name: {first_name}
-✅ Admin Status: {'✅ YES' if is_admin else '❌ NO'}
-
-📋 *Admins List ({len(user_storage.allowed_users)}):*
-"""
-    
-    if user_storage.allowed_users:
-        for admin_id in user_storage.allowed_users:
-            response += f"• `{admin_id}`\n"
-    else:
-        response += "• No admins configured\n"
-    
-    response += f"""
-⚙️ *Configuration:*
-• Invite Only: `{INVITE_ONLY}`
-• API Key: {'✅ Set' if API_KEY else '❌ Not set'}
-
-💡 *To add yourself as admin:*
-1. Stop the bot
-2. Set environment variable:
-   ```bash
-   export ADMIN_USER_ID="{user_id}"
-    
-    # Check database connection
-    db_status = "❓ Unknown"
-    try:
-        db_manager.cursor.execute("SELECT 1")
-        db_status = "✅ Connected"
-    except:
-        db_status = "❌ Disconnected"
-    
-    # Get database stats
-    db_stats = ""
-    try:
-        # Count users
-        db_manager.cursor.execute("SELECT COUNT(*) FROM users")
-        user_count = db_manager.cursor.fetchone()[0]
-        
-        # Count predictions
-        db_manager.cursor.execute("SELECT COUNT(*) FROM predictions")
-        pred_count = db_manager.cursor.fetchone()[0]
-        
-        db_stats = f"• Users: `{user_count}`\n• Predictions: `{pred_count}`\n"
-    except:
-        db_stats = "• Could not load database stats\n"
-    
-    # Build response
-    response = f"""
-🔐 *ADMIN STATUS CHECK*
-
-👤 *Your Info:*
-• ID: `{user_id}`
-• Username: @{username}
-• Name: {first_name}
-
-📋 *Admin Status:*
-• Is Admin: {'✅ YES' if is_admin else '❌ NO'}
-• In Allowed Users: `{user_id in user_storage.allowed_users}`
-• Environment Variable: `{os.environ.get('ADMIN_USER_ID', 'Not set')}`
-• Parsed Admin IDs: `{[id.strip() for id in env_admins if id.strip()]}`
-
-👥 *Current Admins in Memory ({len(admin_ids)}):*
-"""
-    
-    if admin_ids:
-        for admin_id in admin_ids:
-            response += f"• `{admin_id}`\n"
-    else:
-        response += "• No admins loaded\n"
-    
-    # Add bot status
-    response += f"""
-⚙️ *Bot Status:*
-• Invite Only: `{INVITE_ONLY}`
-• Total Allowed Users: `{len(user_storage.allowed_users)}`
-• Database: {db_status}
-{db_stats}
-📊 *Quick Stats:*
-• API Key: {'✅ Configured' if API_KEY else '⚠️ Simulation'}
-• Flask Server: ✅ Running on port {os.getenv('PORT', '8080')}
-
-💡 *How to add yourself as admin:*
-1. Stop the bot
-2. Set environment variable:
-   ```bash
-   export ADMIN_USER_ID="{user_id}"
-
-# ===== FIXED mystats_command =====
 @access_control
 async def mystats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /mystats command - SIMPLE FIXED VERSION"""
@@ -1150,145 +942,206 @@ _Note: {str(e)[:80]}..._
     
     await message.reply_text(response, parse_mode='Markdown')
 
-# ===== CALLBACK HANDLER =====
+# ===== ADMIN COMMAND (FIXED) =====
+@access_control
+async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Check admin status and list admins"""
+    user_id = update.effective_user.id
+    first_name = update.effective_user.first_name or "User"
+    
+    # Check if user is admin
+    is_admin = user_id in user_storage.allowed_users
+    
+    response = f"""
+🔐 *ADMIN STATUS*
+
+👤 Your ID: `{user_id}`
+👤 Name: {first_name}
+✅ Admin Status: {'✅ YES' if is_admin else '❌ NO'}
+
+📋 *Admins List ({len(user_storage.allowed_users)}):*
+"""
+    
+    if user_storage.allowed_users:
+        for admin_id in user_storage.allowed_users:
+            response += f"• `{admin_id}`\n"
+    else:
+        response += "• No admins configured\n"
+    
+    response += f"""
+⚙️ *Configuration:*
+• Invite Only: `{INVITE_ONLY}`
+• API Key: {'✅ Set' if API_KEY else '❌ Not set'}
+
+💡 *To add yourself as admin:*
+1. Stop the bot
+2. Set environment variable:
+   ```bash
+   export ADMIN_USER_ID="{user_id}"
+Restart the bot
+"""
+
+await update.message.reply_text(response, parse_mode='Markdown')
+
+===== CALLBACK HANDLER =====
 @access_control
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle all callback queries"""
-    query = update.callback_query
-    await query.answer()
+"""Handle all callback queries"""
+query = update.callback_query
+await query.answer()
+
+text
+data = query.data
+
+try:
+    if data == "show_matches":
+        matches = data_manager.get_todays_matches()
+        
+        if not matches:
+            await query.edit_message_text(
+                "📅 *TODAY'S MATCHES*\n\nNo matches scheduled for today.",
+                parse_mode='Markdown'
+            )
+            return
+        
+        # Build response
+        response = "📅 *TODAY'S FOOTBALL MATCHES*\n\n"
+        
+        # Group by league
+        matches_by_league = {}
+        for match in matches:
+            league = match['league']
+            if league not in matches_by_league:
+                matches_by_league[league] = []
+            matches_by_league[league].append(match)
+        
+        for league_name, league_matches in matches_by_league.items():
+            response += f"*{league_name}*\n"
+            for match in league_matches:
+                response += f"• ⏰ {match['home']} vs {match['away']} ({match['time']})\n"
+            response += "\n"
+        
+        response += f"_Total: {len(matches)} matches_\n"
+        response += "Tap a match for detailed analysis"
+        
+        # Create keyboard with match options
+        keyboard = []
+        for match in matches[:6]:
+            btn_text = f"📊 {match['home'][:8]} vs {match['away'][:8]}"
+            callback_data = f"analyze_{match['home']}_{match['away']}"
+            keyboard.append([InlineKeyboardButton(btn_text, callback_data=callback_data)])
+        
+        keyboard.append([
+            InlineKeyboardButton("🏆 Standings", callback_data="show_standings_menu"),
+            InlineKeyboardButton("💎 Value Bets", callback_data="show_value_bets")
+        ])
+        keyboard.append([InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            response,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
     
-    data = query.data
+    elif data == "show_standings_menu":
+        keyboard = [
+            [InlineKeyboardButton("🇮🇹 Serie A", callback_data="standings_SA")],
+            [InlineKeyboardButton("🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League", callback_data="standings_PL")],
+            [InlineKeyboardButton("🇪🇸 La Liga", callback_data="standings_PD")],
+            [InlineKeyboardButton("🇩🇪 Bundesliga", callback_data="standings_BL1")],
+            [InlineKeyboardButton("🏆 Champions League", callback_data="standings_CL")],
+            [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            "🏆 *Select League Standings:*",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
     
-    try:
-        if data == "show_matches":
-            matches = data_manager.get_todays_matches()
-            
-            if not matches:
-                await query.edit_message_text(
-                    "📅 *TODAY'S MATCHES*\n\nNo matches scheduled for today.",
-                    parse_mode='Markdown'
-                )
-                return
-            
-            # Build response
-            response = "📅 *TODAY'S FOOTBALL MATCHES*\n\n"
-            
-            # Group by league
-            matches_by_league = {}
-            for match in matches:
-                league = match['league']
-                if league not in matches_by_league:
-                    matches_by_league[league] = []
-                matches_by_league[league].append(match)
-            
-            for league_name, league_matches in matches_by_league.items():
-                response += f"*{league_name}*\n"
-                for match in league_matches:
-                    response += f"• ⏰ {match['home']} vs {match['away']} ({match['time']})\n"
-                response += "\n"
-            
-            response += f"_Total: {len(matches)} matches_\n"
-            response += "Tap a match for detailed analysis"
-            
-            # Create keyboard with match options
-            keyboard = []
-            for match in matches[:6]:
-                btn_text = f"📊 {match['home'][:8]} vs {match['away'][:8]}"
-                callback_data = f"analyze_{match['home']}_{match['away']}"
-                keyboard.append([InlineKeyboardButton(btn_text, callback_data=callback_data)])
-            
-            keyboard.append([
-                InlineKeyboardButton("🏆 Standings", callback_data="show_standings_menu"),
-                InlineKeyboardButton("💎 Value Bets", callback_data="show_value_bets")
-            ])
-            keyboard.append([InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")])
-            
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                response,
-                reply_markup=reply_markup,
-                parse_mode='Markdown'
-            )
+    elif data.startswith("standings_"):
+        league_code = data.replace("standings_", "")
+        standings_data = data_manager.get_standings(league_code)
         
-        elif data == "show_standings_menu":
-            keyboard = [
-                [InlineKeyboardButton("🇮🇹 Serie A", callback_data="standings_SA")],
-                [InlineKeyboardButton("🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League", callback_data="standings_PL")],
-                [InlineKeyboardButton("🇪🇸 La Liga", callback_data="standings_PD")],
-                [InlineKeyboardButton("🇩🇪 Bundesliga", callback_data="standings_BL1")],
-                [InlineKeyboardButton("🏆 Champions League", callback_data="standings_CL")],
-                [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")]
-            ]
-            
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                "🏆 *Select League Standings:*",
-                reply_markup=reply_markup,
-                parse_mode='Markdown'
-            )
+        response = f"🏆 *{standings_data['league_name']} STANDINGS*\n\n"
+        response += "```\n"
+        response += "Pos | Team                | Pld | W  | D  | L  | GF | GA | GD | Pts\n"
+        response += "----|---------------------|-----|----|----|----|----|----|----|-----\n"
         
-        elif data.startswith("standings_"):
-            league_code = data.replace("standings_", "")
-            standings_data = data_manager.get_standings(league_code)
+        for team in standings_data['standings'][:10]:
+            pos = str(team['position']).rjust(2)
+            team_name = team['team'][:20].ljust(20)
+            pld = str(team['played']).rjust(3)
+            won = str(team['won']).rjust(2)
+            draw = str(team['draw']).rjust(2)
+            lost = str(team['lost']).rjust(2)
+            gf = str(team['gf']).rjust(2)
+            ga = str(team['ga']).rjust(2)
+            gd = str(team['gd']).rjust(3)
+            pts = str(team['points']).rjust(3)
             
-            response = f"🏆 *{standings_data['league_name']} STANDINGS*\n\n"
-            response += "```\n"
-            response += "Pos | Team                | Pld | W  | D  | L  | GF | GA | GD | Pts\n"
-            response += "----|---------------------|-----|----|----|----|----|----|----|-----\n"
-            
-            for team in standings_data['standings'][:10]:
-                pos = str(team['position']).rjust(2)
-                team_name = team['team'][:20].ljust(20)
-                pld = str(team['played']).rjust(3)
-                won = str(team['won']).rjust(2)
-                draw = str(team['draw']).rjust(2)
-                lost = str(team['lost']).rjust(2)
-                gf = str(team['gf']).rjust(2)
-                ga = str(team['ga']).rjust(2)
-                gd = str(team['gd']).rjust(3)
-                pts = str(team['points']).rjust(3)
-                
-                response += f"{pos} | {team_name} | {pld} | {won} | {draw} | {lost} | {gf} | {ga} | {gd} | {pts}\n"
-            
-            response += "```\n\n"
-            response += "_Last updated: " + datetime.now().strftime("%Y-%m-%d %H:%M") + "_"
-            
-            keyboard = [
-                [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")]
-            ]
-            
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                response,
-                reply_markup=reply_markup,
-                parse_mode='Markdown'
-            )
+            response += f"{pos} | {team_name} | {pld} | {won} | {draw} | {lost} | {gf} | {ga} | {gd} | {pts}\n"
         
-        elif data == "show_predict_info":
-            response = """
-🎯 *SMART PREDICTION SYSTEM*
+        response += "```\n\n"
+        response += "_Last updated: " + datetime.now().strftime("%Y-%m-%d %H:%M") + "_"
+        
+        keyboard = [
+            [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            response,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+    
+    elif data == "show_predict_info":
+        response = """
+🎯 SMART PREDICTION SYSTEM
 
-⚡ *How it works:*
-1. AI analyzes team statistics, form, and historical data
-2. Calculates win/draw/lose probabilities
-3. Identifies value bets with positive mathematical edge
-4. Provides recommended stake based on confidence
+⚡ How it works:
 
-🔍 *To use:*
-Type `/predict [Home Team] [Away Team]`
-Example: `/predict Inter Milan`
+AI analyzes team statistics, form, and historical data
 
-📈 *For advanced analysis:*
-`/predict "Inter" "Milan" "Serie A"`
+Calculates win/draw/lose probabilities
+
+Identifies value bets with positive mathematical edge
+
+Provides recommended stake based on confidence
+
+🔍 To use:
+Type /predict [Home Team] [Away Team]
+Example: /predict Inter Milan
+
+📈 For advanced analysis:
+/predict "Inter" "Milan" "Serie A"
 """
-            
-            keyboard = [
-                [InlineKeyboardButton("📅 Today's Matches", callback_data="show_matches")],
-                [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")]
-            ]
+
+text
+        keyboard = [
+            [InlineKeyboardButton("📅 Today's Matches", callback_data="show_matches")],
+            [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            response,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+    
+    elif data == "show_value_bets":
+        bets = data_manager.get_todays_value_bets()
+        
+        if not bets:
+            response = "💎 *NO VALUE BETS TODAY*\n\nNo strong value bets identified for today's matches."
+            keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
@@ -1296,226 +1149,186 @@ Example: `/predict Inter Milan`
                 reply_markup=reply_markup,
                 parse_mode='Markdown'
             )
+            return
         
-        elif data == "show_value_bets":
-            bets = data_manager.get_todays_value_bets()
-            
-            if not bets:
-                response = "💎 *NO VALUE BETS TODAY*\n\nNo strong value bets identified for today's matches."
-                keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")]]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                
-                await query.edit_message_text(
-                    response,
-                    reply_markup=reply_markup,
-                    parse_mode='Markdown'
-                )
-                return
-            
-            response = "💎 *TODAY'S TOP VALUE BETS*\n\n"
-            for i, bet in enumerate(bets, 1):
-                response += f"`{i}.` *{bet['match']}*\n"
-                response += f"   • Bet: `{bet['selection']}`\n"
-                response += f"   • Odds: `{bet['odds']}` | Edge: `+{bet['edge']}%`\n"
-                stars = '⭐⭐' if bet['edge'] > 5 else '⭐'
-                response += f"   • Recommended: {stars}\n\n"
-            
-            response += "📈 *Value Betting Strategy:*\n"
-            response += "• Only bet when edge > 3%\n"
-            response += "• Use 1/4 Kelly stake (conservative)\n"
-            response += "• Track all bets in your statistics\n\n"
-            response += "_Generated by Serie AI • Database Edition_"
-            
-            keyboard = [
-                [InlineKeyboardButton("📊 My Stats", callback_data="user_stats")],
-                [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                response,
-                reply_markup=reply_markup,
-                parse_mode='Markdown'
-            )
+        response = "💎 *TODAY'S TOP VALUE BETS*\n\n"
+        for i, bet in enumerate(bets, 1):
+            response += f"`{i}.` *{bet['match']}*\n"
+            response += f"   • Bet: `{bet['selection']}`\n"
+            response += f"   • Odds: `{bet['odds']}` | Edge: `+{bet['edge']}%`\n"
+            stars = '⭐⭐' if bet['edge'] > 5 else '⭐'
+            response += f"   • Recommended: {stars}\n\n"
         
-        elif data == "user_stats":
-            await mystats_command(update, context)
+        response += "📈 *Value Betting Strategy:*\n"
+        response += "• Only bet when edge > 3%\n"
+        response += "• Use 1/4 Kelly stake (conservative)\n"
+        response += "• Track all bets in your statistics\n\n"
+        response += "_Generated by Serie AI • Database Edition_"
         
-        elif data == "show_help":
-            await help_command(update, context)
+        keyboard = [
+            [InlineKeyboardButton("📊 My Stats", callback_data="user_stats")],
+            [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
         
-        elif data == "back_to_menu":
-            await start_command(update, context)
-        
-        elif data.startswith("analyze_"):
-            parts = data.split("_")
-            if len(parts) >= 3:
-                home = parts[1]
-                away = parts[2]
-                
-                league = "Unknown"
-                for match in data_manager.todays_matches:
-                    if match['home'] == home and match['away'] == away:
-                        league = data_manager.leagues.get(match['league'], 'Unknown')
-                        break
-                
-                analysis = data_manager.analyze_match(home, away, league)
-                probs = analysis['probabilities']
-                goals = analysis['goals']
-                value = analysis['value_bet']
-                
-                prediction_text = {
-                    '1': f'Home Win ({home})',
-                    'X': 'Draw',
-                    '2': f'Away Win ({away})'
-                }
-                
-                response = f"""
-🔍 *MATCH ANALYSIS: {home} vs {away}*
+        await query.edit_message_text(
+            response,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+    
+    elif data == "user_stats":
+        await mystats_command(update, context)
+    
+    elif data == "show_help":
+        await help_command(update, context)
+    
+    elif data == "back_to_menu":
+        await start_command(update, context)
+    
+    elif data.startswith("analyze_"):
+        parts = data.split("_")
+        if len(parts) >= 3:
+            home = parts[1]
+            away = parts[2]
+            
+            league = "Unknown"
+            for match in data_manager.todays_matches:
+                if match['home'] == home and match['away'] == away:
+                    league = data_manager.leagues.get(match['league'], 'Unknown')
+                    break
+            
+            analysis = data_manager.analyze_match(home, away, league)
+            probs = analysis['probabilities']
+            goals = analysis['goals']
+            value = analysis['value_bet']
+            
+            prediction_text = {
+                '1': f'Home Win ({home})',
+                'X': 'Draw',
+                '2': f'Away Win ({away})'
+            }
+            
+            response = f"""
+🔍 MATCH ANALYSIS: {home} vs {away}
 
-🏆 *Competition:* {league}
+🏆 Competition: {league}
 
-📊 *PROBABILITIES:*
-• 🏠 Home Win: `{probs['home']}%`
-• ⚖️ Draw: `{probs['draw']}%`
-• 🚌 Away Win: `{probs['away']}%`
-• 🎯 Predicted: *{prediction_text[analysis['prediction']]}*
-• 🔐 Confidence: `{analysis['confidence']}%`
+📊 PROBABILITIES:
+• 🏠 Home Win: {probs['home']}%
+• ⚖️ Draw: {probs['draw']}%
+• 🚌 Away Win: {probs['away']}%
+• 🎯 Predicted: {prediction_text[analysis['prediction']]}
+• 🔐 Confidence: {analysis['confidence']}%
 
-🥅 *EXPECTED GOALS:*
-• {home}: `{goals['home']}` goals
-• {away}: `{goals['away']}` goals
-• Total: `{goals['total']}` goals
+🥅 EXPECTED GOALS:
+• {home}: {goals['home']} goals
+• {away}: {goals['away']} goals
+• Total: {goals['total']} goals
 
-💎 *VALUE BET IDENTIFIED:*
-• Market: `{value['market']}`
-• Selection: `{value['selection']}`
-• Odds: `{value['odds']}` (Fair: {value['fair_odds']})
-• Edge: `+{value['edge']}%`
+💎 VALUE BET IDENTIFIED:
+• Market: {value['market']}
+• Selection: {value['selection']}
+• Odds: {value['odds']} (Fair: {value['fair_odds']})
+• Edge: +{value['edge']}%
 • Recommended Stake: {value['stake']}
 
-📈 *RECOMMENDATION:*
-{'✅ **STRONG BET** - High confidence value bet' if value['edge'] > 5 else '🟡 **MODERATE BET** - Positive edge detected' if value['edge'] > 3 else '⏸️ **NO VALUE** - Avoid or small stake'}
+📈 RECOMMENDATION:
+{'✅ STRONG BET - High confidence value bet' if value['edge'] > 5 else '🟡 MODERATE BET - Positive edge detected' if value['edge'] > 3 else '⏸️ NO VALUE - Avoid or small stake'}
 
-_AI Analysis • {datetime.now().strftime('%Y-%m-%d %H:%M')}_
+AI Analysis • {datetime.now().strftime('%Y-%m-%d %H:%M')}
 """
-                
-                keyboard = [
-                    [InlineKeyboardButton("📅 More Matches", callback_data="show_matches")],
-                    [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")]
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                
-                await query.edit_message_text(
-                    response,
-                    reply_markup=reply_markup,
-                    parse_mode='Markdown'
-                )
-        
-        else:
+
+text
+            keyboard = [
+                [InlineKeyboardButton("📅 More Matches", callback_data="show_matches")],
+                [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
             await query.edit_message_text(
-                "❌ Unknown command. Please use /start to return to main menu.",
+                response,
+                reply_markup=reply_markup,
                 parse_mode='Markdown'
             )
     
-    except Exception as e:
-        logger.error(f"❌ Callback handler error: {e}")
+    else:
         await query.edit_message_text(
-            "❌ An error occurred. Please try again or use /start",
+            "❌ Unknown command. Please use /start to return to main menu.",
             parse_mode='Markdown'
         )
 
-# ===== ERROR HANDLER =====
+except Exception as e:
+    logger.error(f"❌ Callback handler error: {e}")
+    await query.edit_message_text(
+        "❌ An error occurred. Please try again or use /start",
+        parse_mode='Markdown'
+    )
+===== ERROR HANDLER =====
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle errors in the bot"""
-    logger.error(f"Update {update} caused error: {context.error}")
-    
-    try:
-        if update and update.effective_message:
-            await update.effective_message.reply_text(
-                "❌ An error occurred. Please try again later.",
-                parse_mode='Markdown'
-            )
-    except:
-        pass
+"""Handle errors in the bot"""
+logger.error(f"Update {update} caused error: {context.error}")
 
-# ===== MAIN FUNCTION =====
-# ===== SINGLE INSTANCE CHECK =====
-def is_bot_already_running():
-    """Check if another instance is already running"""
-    current_pid = os.getpid()
-    current_script = os.path.abspath(__file__)
-    
-    logger.info(f"🔍 Checking for existing bot instances...")
-    logger.info(f"   Current PID: {current_pid}")
-    logger.info(f"   Current script: {current_script}")
-    
-    for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
-        try:
-            # Get process info
-            proc_info = proc.info
-            
-            # Skip current process
-            if proc_info['pid'] == current_pid:
-                continue
-                
-            # Check if it's a Python process
-            if not proc_info['name'] or 'python' not in proc_info['name'].lower():
-                continue
-                
-            # Check command line for bot.py
-            cmdline = proc_info['cmdline'] or []
-            for cmd in cmdline:
-                if 'bot.py' in cmd:
-                    logger.warning(f"⚠️ Found another bot instance: PID {proc_info['pid']}")
-                    logger.warning(f"   Command: {' '.join(cmdline[:3])}...")
-                    return True
-                    
-        except (psutil.NoSuchProcess, psutil.AccessDenied, KeyError):
-            continue
-    
-    logger.info("✅ No other bot instances found")
-    return False
+text
+try:
+    if update and update.effective_message:
+        await update.effective_message.reply_text(
+            "❌ An error occurred. Please try again later.",
+            parse_mode='Markdown'
+        )
+except:
+    pass
+===== MAIN FUNCTION =====
 def main():
-    """Main function to run the bot"""
-    logger.info("🚀 Starting Serie AI Bot...")
-    
-    # Start Flask web server in separate thread
-    flask_thread = Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    logger.info(f"🌐 Flask server started on port {os.getenv('PORT', '8080')}")
-    
-    # Create Application
-    application = Application.builder().token(BOT_TOKEN).build()
-    
-    # Add command handlers
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("predict", quick_predict_command))
-    application.add_handler(CommandHandler("matches", todays_matches_command))
-    application.add_handler(CommandHandler("standings", standings_command))
-    application.add_handler(CommandHandler("value", value_bets_command))
-    application.add_handler(CommandHandler("mystats", mystats_command))
-    application.add_handler(CommandHandler("help", help_command))
-    
-    # Add callback query handler
-    application.add_handler(CallbackQueryHandler(callback_handler))
-    
-    # Add error handler
-    application.add_error_handler(error_handler)
-    
-    # Start the bot
-    logger.info("🤖 Bot is running. Press Ctrl+C to stop.")
-    logger.info(f"📊 Database: ✅ Connected to SQLite")
-    logger.info(f"🔑 API Key: {'✅ Configured' if API_KEY else '⚠️ Using simulation'}")
-    
-    # Run bot until stopped
-    application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+"""Main function to run the bot"""
 
-if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        logger.info("👋 Bot stopped by user")
-    except Exception as e:
-        logger.error(f"💥 Fatal error: {e}")
-        sys.exit(1)
+text
+logger.info("🚀 Starting Serie AI Bot...")
+
+# Start Flask web server in separate thread
+flask_thread = Thread(target=run_flask, daemon=True)
+flask_thread.start()
+logger.info(f"🌐 Flask server started on port {os.getenv('PORT', '8080')}")
+
+# Create Application
+application = Application.builder().token(BOT_TOKEN).build()
+
+# Add command handlers
+application.add_handler(CommandHandler("start", start_command))
+application.add_handler(CommandHandler("predict", quick_predict_command))
+application.add_handler(CommandHandler("matches", todays_matches_command))
+application.add_handler(CommandHandler("standings", standings_command))
+application.add_handler(CommandHandler("value", value_bets_command))
+application.add_handler(CommandHandler("mystats", mystats_command))
+application.add_handler(CommandHandler("help", help_command))
+application.add_handler(CommandHandler("admin", admin_command))
+
+# Add callback query handler
+application.add_handler(CallbackQueryHandler(callback_handler))
+
+# Add error handler
+application.add_error_handler(error_handler)
+
+# Start the bot
+logger.info("🤖 Bot is running. Press Ctrl+C to stop.")
+logger.info(f"📊 Database: ✅ Connected to SQLite")
+logger.info(f"🔑 API Key: {'✅ Configured' if API_KEY else '⚠️ Using simulation'}")
+
+# Run bot until stopped
+application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+if name == "main":
+try:
+main()
+except KeyboardInterrupt:
+logger.info("👋 Bot stopped by user")
+except Exception as e:
+logger.error(f"💥 Fatal error: {e}")
+sys.exit(1)
+
+text
+
+## **🚀 Steps to fix:**
+
+1. **Stop all running instances:**
+   ```bash
+   pkill -f "python.*bot.py"
