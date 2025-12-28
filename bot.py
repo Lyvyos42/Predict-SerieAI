@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ⚽ SERIE AI BOT - COMPLETE PRODUCTION VERSION WITH DATABASE
-FULLY FUNCTIONAL - NO TRUNCATIONS
+FULLY FUNCTIONAL - NO TRUNCATIONS - SYNTAX FIXED
 """
 
 import os
@@ -339,8 +339,7 @@ def get_message_object(update: Update):
     elif update.callback_query:
         return update.callback_query.message
     return None
-
-@access_control
+    @access_control
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command"""
     status = "✅ *Real Data Enabled*" if API_KEY else "⚠️ *Using Simulation*"
@@ -413,7 +412,7 @@ async def quick_predict_command(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text(
             "Usage: `/predict [Home Team] [Away Team]`\n"
             "Example: `/predict Inter Milan`\n"
-            "Advanced: `/predict "Inter" "Milan" "Serie A"`",
+            'Advanced: `/predict "Inter" "Milan" "Serie A"`',
             parse_mode='Markdown'
         )
         return
@@ -669,7 +668,8 @@ Please contact the administrator.
 """
 await message.reply_text(response, parse_mode='Markdown')
 db.close()
-return  # Get user predictions
+return
+  # Get user predictions
     predictions = db.get_user_predictions(user_id)
     
     # Calculate statistics
@@ -728,11 +728,11 @@ response += f"• Confidence: {latest_pred.confidence}%\n"
 response += f"• Date: {latest_pred.created_at.strftime('%Y-%m-%d %H:%M')}\n"
 else:
 response += "• No predictions yet. Use /predict to start!\n"
-  response += f"\n📅 *Activity Level:* {'🔥 Active' if total_predictions > 5 else '👍 Regular' if total_predictions > 2 else '🆕 New'}"
+response += f"\n📅 *Activity Level:* {'🔥 Active' if total_predictions > 5 else '👍 Regular' if total_predictions > 2 else '🆕 New'}"
         
     else:
         response = f"""
-📊 YOUR STATISTICS
+        📊 YOUR STATISTICS
 
 👤 Welcome, {first_name}!
 
@@ -758,6 +758,16 @@ Your statistics will appear here after making predictions.
 except Exception as e:
     logger.error(f"❌ Database stats failed: {e}")
     response = f"""
+    📊 YOUR STATISTICS
+
+❌ Error Loading Statistics
+
+Could not load your statistics due to a database error.
+
+Error: {str(e)[:150]}
+
+Please try again in a few moments.
+"""
 📊 YOUR STATISTICS
 
 ❌ Error Loading Statistics
@@ -768,57 +778,16 @@ Error: {str(e)[:150]}
 
 Please try again in a few moments.
 """
-await message.reply_text(response, parse_mode='Markdown')
-@access_control
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-"""Handle /help command"""
-help_text = """
-🤖 SERIE AI BOT - HELP GUIDE
-
-🎯 MAIN COMMANDS:
-• /start - Main menu with all features
-• /predict [Home] [Away] - Get AI prediction for a match
-• /matches - Today's football matches
-• /standings - League standings (select league)
-• /value - Today's value betting opportunities
-• /mystats - Your personal statistics & history
-
-🏆 LEAGUES SUPPORTED:
-• 🇮🇹 Serie A
-• 🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League
-• 🇪🇸 La Liga
-• 🇩🇪 Bundesliga
-• 🏆 Champions League
-
-💎 WHAT ARE VALUE BETS?
-Value bets occur when the bookmaker's odds are higher than the true probability.
-We use AI to detect these opportunities and show you the edge.
-
-📊 DATABASE FEATURES:
-✅ All predictions saved to PostgreSQL
-✅ Track your accuracy over time
-✅ Personal statistics dashboard
-✅ Historical data analysis
-
-🔒 ACCESS CONTROL:
-This bot is invitation-only. If you have an invite code:
-/start invite123
-
-🆘 NEED HELP?
-Contact the administrator for support.
-
-Version: 2.0 • Database Edition • {datetime.now().strftime('%Y-%m-%d')}
-""".format(datetime.now().strftime('%Y-%m-%d'))
 keyboard = [[InlineKeyboardButton("🏠 Main Menu", callback_data="back_to_menu")]]
 reply_markup = InlineKeyboardMarkup(keyboard)
 
 message = get_message_object(update)
 if message:
     await message.reply_text(help_text, reply_markup=reply_markup, parse_mode='Markdown')
-  @access_control
+    @access_control
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 """Handle /admin command - ADMIN ONLY"""
-user_id = update.effective_user.id  
+user_id = update.effective_user.id
 # Check if user is admin
 admin_ids = [int(id.strip()) for id in ADMIN_USER_ID if id.strip().isdigit()]
 if user_id not in admin_ids:
@@ -855,7 +824,7 @@ try:
     db.close()
     
     response = f"""
-    👑 ADMIN PANEL
+👑 ADMIN PANEL
 
 📊 DATABASE STATISTICS:
 • Total Users: {total_users}
@@ -985,7 +954,7 @@ try:
 except Exception as e:
     logger.error(f"❌ DBStats command failed: {e}")
     response = f"""
-    📊 DETAILED DATABASE STATISTICS
+📊 DETAILED DATABASE STATISTICS
 
 ❌ Error loading detailed statistics:
 {str(e)[:150]}
@@ -1028,7 +997,7 @@ elif data == "show_help":
 
 elif data == "back_to_menu":
     await start_command(update, context)
-    async def show_standings(update: Update, league_code: str):
+async def show_standings(update: Update, league_code: str):
 """Show standings for a specific league"""
 query = update.callback_query
 await query.answer()
@@ -1108,7 +1077,7 @@ async def database_heartbeat():
 """Periodic database health check"""
 while True:
 await asyncio.sleep(300) # Check every 5 minutes
-    try:
+ try:
         healthy, error = check_database_health()
         if healthy:
             logger.debug("✅ Database heartbeat successful")
@@ -1129,7 +1098,7 @@ await asyncio.sleep(300) # Check every 5 minutes
                 
     except Exception as e:
         logger.error(f"❌ Heartbeat error: {e}")
-        def main():
+def main():
 """Main entry point"""
 print("=" * 60)
 print("⚽ SERIE AI BOT - PRODUCTION VERSION WITH DATABASE")
@@ -1259,5 +1228,6 @@ application.run_polling(
     drop_pending_updates=True,
     allowed_updates=Update.ALL_TYPES,
     close_loop=False
-)if name == "main":
+)
+if name == "main":
 main()
