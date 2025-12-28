@@ -761,6 +761,220 @@ ALTER TABLE users ALTER COLUMN telegram_id TYPE BIGINT;
 ALTER TABLE predictions ALTER COLUMN telegram_id TYPE BIGINT;
 ALTER TABLE bets ALTER COLUMN telegram_id TYPE BIGINT;
 async def database_heartbeat():
+           response += f"\n📈 *Health Status:*\n"
+        
+        healthy, error = check_database_health()
+        if healthy:
+            response += "✅ Database: Connected\n"
+        else:
+            response += f"❌ Database: {error[:50]}\n"
+        
+        response += f"🤖 Bot: Running\n"
+        response += f"🔒 Invite-Only: {'Yes' if INVITE_ONLY else 'No'}\n"
+        response += f"👑 Admins: {len(ADMIN_USER_ID) if ADMIN_USER_ID[0] else 0}\n"
+        
+        response += "\n🛠️ *Admin Commands:*\n"
+        response += "• /dbstats - Detailed database info\n"
+        response += "• Broadcast: Coming soon\n"
+        response += "• User Management: Coming soon\n"
+        
+    except Exception as e:
+        logger.error(f"Admin command error: {e}")
+        response = f"❌ Admin error: {str(e)}"
+    
+    await update.message.reply_text(response, parse_mode='Markdown')
+
+@access_control
+async def dbstats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    
+    if str(user_id) not in ADMIN_USER_ID and ADMIN_USER_ID != ['']:
+        await update.message.reply_text("❌ Admin access only.")
+        return
+    
+    try:
+        db = DatabaseManager()
+        from sqlalchemy import text
+        
+        response = "📊 *DATABASE DETAILED STATS*\n\n"
+        
+        tables = ['users', 'predictions', 'bets', 'value_bets', 'system_logs']
+        
+        for table in tables:
+            try:
+                result = db.db.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar()
+                response += f"• {table}: {result} records\n"
+            except:
+                response += f"• {table}: Table not found\n"
+        
+        response += "\n📈 *Performance Metrics:*\n"
+        
+        try:
+            result = db.db.execute(text("""
+                SELECT 
+                    COUNT(*) as total_users,
+                    AVG((SELECT COUNT(*) FROM predictions WHERE users.id = predictions.telegram_id)) as avg_predictions_per_user,
+                    MAX((SELECT COUNT(*) FROM predictions WHERE users.id = predictions.telegram_id)) as max_predictions
+                FROM users
+            """)).fetchone()
+            
+            response += f"• Avg predictions/user: {float(result[1] or 0):.1f}\n"
+            response += f"• Max predictions/user: {result[2] or 0}\n"
+        except Exception as e:
+            response += f"• Metrics error: {str(e)[:50]}\n"
+        
+        response += "\n🔍 *Schema Info:*\n"
+        
+        try:
+            result = db.db.execute(text("""
+                SELECT column_name, data_type 
+                FROM information_schema.columns 
+                WHERE table_name = 'users' 
+                ORDER BY ordinal_position
+            """)).fetchall()
+            
+            response += "• users table columns:\n"
+            for col in result[:5]:
+                response += f"  - {col[0]}: {col[1]}\n"
+        except:
+            response += "• Schema info unavailable\n"
+        
+        response += "\n💾 *Database Info:*\n"
+        
+        try:
+            version = db.db.execute(text("SELECT version()")).scalar()
+            response += f"• PostgreSQL: {version.split(',')[0]}\n"
+        except:
+            response += "• Version info unavailable\n"
+        
+        db.close()
+        
+        healthy, error = check_database_health()
+        response += f"• Connection: {'✅ Healthy' if healthy else f'❌ {error[:50]}'}\n"
+        
+    except Exception as e:
+        logger.error(f"DB stats error: {e}")
+        response = f"❌ Database stats error: {str(e)}"
+    
+    await update.message.reply_text(response, parse_mode='Markdown')
+
+@access_control
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    
+    if data == "show_matches":
+        await todays_matches_command(update, context)
+        await start_command(update, context)
+    
+    elif data == "show_standings_menu":
+        await standings_command(update, context)
+    
+    elif data.startswith("standings_"):
+        league_code = data.split("_")[1]
+        await show_standings(update, league_code)
+    
+    elif data == "show_predict_info":
+        await show_predict_info_callback(update, context)
+    
+    elif data == "show_value_bets":
+        await value_bets_command(update, context)
+        await start_command(update, context)
+    
+    elif data == "user_stats":
+        await mystats_command(update, context)
+        await start_command(update, context)
+    
+    elif data == "show_help":
+        await help_command(update, context)
+        await start_command(update, context)
+    
+    elif data == "back_to_menu":
+        await start_command(update, context)
+
+async def show_standings(update: Update, league_code: str):
+    query = update.callback_query
+    await query.answer()
+    
+    standings_data = data_manager.get_standings(league_code)
+    
+    if not standings_data:
+        await query.edit_message_text("❌ Could not fetch standings.")
+        return
+    
+    league_name = standings_data['league_name']
+    standings = standings_data['standings']
+    
+    response = f"🏆 *{league_name} STANDINGS*\n\n"
+    response += "```\n"
+    response += " #  Team           P   W   D   L   GF  GA  GD  Pts\n"
+    response += "--- ------------- --- --- --- --- --- --- --- ---\n"
+    
+    for team in standings[:10]:
+        team_name = team['team'][:13]
+        response += f"{team['position']:2}  {team_name:13} {team['played']:3} {team['won']:3} {team['draw']:3} {team['lost']:3} {team['gf']:3} {team['ga']:3} {team['gd']:3} {team['points']:4}\n"
+    
+    response += "```\n"
+    response += f"_Showing top {min(10, len(standings))} of {len(standings)} teams_\n"
+    
+    keyboard = [
+        [InlineKeyboardButton("🔙 Back to Standings", callback_data="show_standings_menu")],
+        [InlineKeyboardButton("🏠 Main Menu", callback_data="back_to_menu")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(response, reply_markup=reply_markup, parse_mode='Markdown')
+
+async def show_predict_info_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    text = """
+🎯 *SMART PREDICTION*
+
+How it works:
+
+AI analyzes team statistics
+
+Considers home/away advantage
+
+Evaluates recent form
+
+Calculates value bets
+
+*Quick Prediction:*
+/predict [Home Team] [Away Team]
+Example: /predict Inter Milan
+
+*DATABASE FEATURE:*
+✅ All predictions automatically saved
+✅ Track your accuracy over time
+✅ View history with /mystats
+✅ Compete with other users
+
+Using advanced AI models + PostgreSQL database
+"""
+    
+    keyboard = [[InlineKeyboardButton("🏠 Main Menu", callback_data="back_to_menu")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle errors in the bot."""
+    logger.error(f"Update {update} caused error {context.error}")
+    
+    try:
+        if update and update.effective_message:
+            await update.effective_message.reply_text(
+                "❌ An error occurred. Please try again later."
+            )
+    except:
+        pass
+
+async def database_heartbeat():
     """Regular database health check."""
     while True:
         await asyncio.sleep(300)
