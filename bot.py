@@ -563,7 +563,6 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 """Handle /help command"""
 help_text = """
-
 💎 Value Betting Strategy:
 • Only bet when edge > 3%
 • Use recommended stake (⭐ = small, ⭐⭐ = medium)
