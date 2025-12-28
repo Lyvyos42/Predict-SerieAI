@@ -919,21 +919,41 @@ _AI-Powered Football Predictions • v2.0 • Database Edition_
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(help_text, reply_markup=reply_markup, parse_mode='Markdown')
-    @access_control
+@access_control
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Check admin status and list admins"""
     user_id = update.effective_user.id
-    username = update.effective_user.username or "No username"
     first_name = update.effective_user.first_name or "User"
     
     # Check if user is admin
     is_admin = user_id in user_storage.allowed_users
     
-    # Get environment variable
-    env_admins = os.environ.get("ADMIN_USER_ID", "").split(",")
+    response = f"""
+🔐 *ADMIN STATUS*
+
+👤 Your ID: `{user_id}`
+👤 Name: {first_name}
+✅ Admin Status: {'✅ YES' if is_admin else '❌ NO'}
+
+📋 *Admins List ({len(user_storage.allowed_users)}):*
+"""
     
-    # Get actual admin IDs from storage
-    admin_ids = list(user_storage.allowed_users)
+    if user_storage.allowed_users:
+        for admin_id in user_storage.allowed_users:
+            response += f"• `{admin_id}`\n"
+    else:
+        response += "• No admins configured\n"
+    
+    response += f"""
+⚙️ *Configuration:*
+• Invite Only: `{INVITE_ONLY}`
+• API Key: {'✅ Set' if API_KEY else '❌ Not set'}
+
+💡 *To add yourself as admin:*
+1. Stop the bot
+2. Set environment variable:
+   ```bash
+   export ADMIN_USER_ID="{user_id}"
     
     # Check database connection
     db_status = "❓ Unknown"
