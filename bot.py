@@ -919,12 +919,10 @@ async def mystats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 _Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}_
 """
-        
-    except Exception as e:
+ except Exception as e:
         logger.error(f"❌ Stats error: {e}", exc_info=True)
         response = f"""
 📊 *YOUR STATISTICS*
-
 👤 User: {first_name}
 🆔 ID: `{user_id}`
 
