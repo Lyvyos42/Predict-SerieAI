@@ -919,6 +919,85 @@ _AI-Powered Football Predictions • v2.0 • Database Edition_
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(help_text, reply_markup=reply_markup, parse_mode='Markdown')
+    @access_control
+async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Check admin status and list admins"""
+    user_id = update.effective_user.id
+    username = update.effective_user.username or "No username"
+    first_name = update.effective_user.first_name or "User"
+    
+    # Check if user is admin
+    is_admin = user_id in user_storage.allowed_users
+    
+    # Get environment variable
+    env_admins = os.environ.get("ADMIN_USER_ID", "").split(",")
+    
+    # Get actual admin IDs from storage
+    admin_ids = list(user_storage.allowed_users)
+    
+    # Check database connection
+    db_status = "❓ Unknown"
+    try:
+        db_manager.cursor.execute("SELECT 1")
+        db_status = "✅ Connected"
+    except:
+        db_status = "❌ Disconnected"
+    
+    # Get database stats
+    db_stats = ""
+    try:
+        # Count users
+        db_manager.cursor.execute("SELECT COUNT(*) FROM users")
+        user_count = db_manager.cursor.fetchone()[0]
+        
+        # Count predictions
+        db_manager.cursor.execute("SELECT COUNT(*) FROM predictions")
+        pred_count = db_manager.cursor.fetchone()[0]
+        
+        db_stats = f"• Users: `{user_count}`\n• Predictions: `{pred_count}`\n"
+    except:
+        db_stats = "• Could not load database stats\n"
+    
+    # Build response
+    response = f"""
+🔐 *ADMIN STATUS CHECK*
+
+👤 *Your Info:*
+• ID: `{user_id}`
+• Username: @{username}
+• Name: {first_name}
+
+📋 *Admin Status:*
+• Is Admin: {'✅ YES' if is_admin else '❌ NO'}
+• In Allowed Users: `{user_id in user_storage.allowed_users}`
+• Environment Variable: `{os.environ.get('ADMIN_USER_ID', 'Not set')}`
+• Parsed Admin IDs: `{[id.strip() for id in env_admins if id.strip()]}`
+
+👥 *Current Admins in Memory ({len(admin_ids)}):*
+"""
+    
+    if admin_ids:
+        for admin_id in admin_ids:
+            response += f"• `{admin_id}`\n"
+    else:
+        response += "• No admins loaded\n"
+    
+    # Add bot status
+    response += f"""
+⚙️ *Bot Status:*
+• Invite Only: `{INVITE_ONLY}`
+• Total Allowed Users: `{len(user_storage.allowed_users)}`
+• Database: {db_status}
+{db_stats}
+📊 *Quick Stats:*
+• API Key: {'✅ Configured' if API_KEY else '⚠️ Simulation'}
+• Flask Server: ✅ Running on port {os.getenv('PORT', '8080')}
+
+💡 *How to add yourself as admin:*
+1. Stop the bot
+2. Set environment variable:
+   ```bash
+   export ADMIN_USER_ID="{user_id}"
 
 # ===== FIXED mystats_command =====
 @access_control
