@@ -869,3 +869,88 @@ async def mystats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             avg_edge = round(sum(b.get('edge', 0) for b in value_bets) / total_value_bets, 1)
         else:
             profitable_bets = 0
+            avg_edge = 0
+        
+        # User level based on activity
+        if total_predictions > 100:
+            user_level = "🟡 Master"
+            level_emoji = "👑"
+        elif total_predictions > 50:
+            user_level = "🟣 Expert"
+            level_emoji = "💎"
+        elif total_predictions > 20:
+            user_level = "🔵 Pro"
+            level_emoji = "⚡"
+        elif total_predictions > 5:
+            user_level = "🟢 Intermediate"
+            level_emoji = "🚀"
+        else:
+            user_level = "⚪ Beginner"
+            level_emoji = "🌱"
+        
+        # Build response - AVOID date parsing issues
+        response = f"""
+{level_emoji} *YOUR STATISTICS*
+
+👤 *Profile:*
+• Name: {first_name}
+• Username: {username}
+• ID: `{user_id}`
+• Level: {user_level}
+
+📊 *Database Records:*
+• Total Predictions: `{total_predictions}`
+• Value Bets Found: `{total_value_bets}`
+• Favorite League: {fav_league} ({fav_league_count} predictions)
+
+📈 *Performance Metrics:*
+• Correct Predictions: `{correct_predictions}/{total_predictions}`
+• Accuracy Rate: `{accuracy}%`
+• Average Confidence: `{avg_confidence}%`
+• Profitable Value Bets: `{profitable_bets}/{total_value_bets}`
+• Average Edge: `{avg_edge}%`
+
+{"🏆 *Recent Predictions:*" if predictions else "🚀 *Get Started:*"}
+"""
+        
+        # Show recent predictions (safe display without date parsing)
+        if predictions:
+            for i, p in enumerate(predictions[:3], 1):
+                home = p.get('home_team', 'Team1')[:15]
+                away = p.get('away_team', 'Team2')[:15]
+                league = p.get('league', '')[:10]
+                league_display = f" ({league})" if league else ""
+                response += f"{i}. {home} vs {away}{league_display}\n"
+        else:
+            response += "• No predictions yet\n• Use `/predict Inter Milan` to start\n"
+        
+        response += f"""
+💡 *Improvement Tips:*
+1. Focus on matches with >65% confidence
+2. Track value bets with edge > 3%
+3. Review your predictions weekly
+
+_Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}_
+"""
+        
+    except Exception as e:
+        logger.error(f"❌ Stats error: {e}", exc_info=True)
+        response = f"""
+📊 *YOUR STATISTICS*
+
+👤 User: {first_name}
+🆔 ID: `{user_id}`
+
+⚠️ *Statistics Overview*
+
+We're having trouble retrieving your detailed statistics.
+
+📝 *Quick Status:*
+• Your predictions are being saved to our database
+• Use `/predict` to analyze more matches
+• Check back later for detailed analytics
+
+_Note: {str(e)[:80]}..._
+"""
+    
+    await message.reply_text(response, parse_mode='Markdown')
